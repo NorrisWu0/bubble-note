@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/norriswu0/bubble-note/internal/domain"
+	"github.com/norriswu0/bubble-note/internal/notes"
 	_ "modernc.org/sqlite"
 )
 
@@ -50,66 +50,66 @@ func (s *Store) initialize() error {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-func (s *Store) CreateNote(title, content string, tags []string) (domain.Note, error) {
+func (s *Store) CreateNote(title, content string, tags []string) (notes.Note, error) {
 	return s.saveNewNote(title, content, tags)
 }
 
-func (s *Store) saveNewNote(title, content string, tags []string) (domain.Note, error) {
+func (s *Store) saveNewNote(title, content string, tags []string) (notes.Note, error) {
 	now := time.Now().UTC()
 	noteID := newID()
 	revisionID := revisionID(noteID, now)
 	tx, err := s.db.Begin()
 	if err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	defer tx.Rollback()
 	if _, err := tx.Exec(`INSERT INTO notes (id, title, current_revision_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`, noteID, title, revisionID, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	if err := insertRevision(tx, revisionID, noteID, title, content, now); err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	if err := replaceTags(tx, noteID, tags); err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	return s.GetNote(noteID)
 }
 
-func (s *Store) GetNote(id string) (domain.Note, error) {
+func (s *Store) GetNote(id string) (notes.Note, error) {
 	row := s.db.QueryRow(`SELECT n.id, n.title, r.content, n.created_at, n.updated_at, n.current_revision_id,
 		(SELECT COUNT(*) FROM revisions WHERE note_id = n.id)
 		FROM notes n JOIN revisions r ON r.id = n.current_revision_id
 		WHERE n.id = ? AND n.deleted_at IS NULL`, id)
-	var note domain.Note
+	var note notes.Note
 	var created, updated string
 	if err := row.Scan(&note.ID, &note.Title, &note.Content, &created, &updated, &note.CurrentRevID, &note.RevisionCount); err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	var err error
 	note.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
 	if err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	note.UpdatedAt, err = time.Parse(time.RFC3339Nano, updated)
 	if err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	note.Tags, err = s.tags(id)
 	if err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	return note, nil
 }
 
-func (s *Store) ListNotes(filter domain.NoteFilter) ([]domain.Note, error) {
+func (s *Store) ListNotes(filter notes.Filter) ([]notes.Note, error) {
 	query := `SELECT n.id, n.title, r.content, n.created_at, n.updated_at, n.current_revision_id,
 		(SELECT COUNT(*) FROM revisions WHERE note_id = n.id)
 		FROM notes n JOIN revisions r ON r.id = n.current_revision_id
 		WHERE n.deleted_at IS NULL`
-	args := make([]any, 0, 4)
+	args := make([]interface{}, 0, 4)
 	if filter.Query != "" {
 		query += ` AND n.id IN (SELECT note_id FROM revision_search WHERE revision_search MATCH ?)`
 		args = append(args, searchQuery(filter.Query))
@@ -132,9 +132,9 @@ func (s *Store) ListNotes(filter domain.NoteFilter) ([]domain.Note, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var notes []domain.Note
+	var result []notes.Note
 	for rows.Next() {
-		var note domain.Note
+		var note notes.Note
 		var created, updated string
 		if err := rows.Scan(&note.ID, &note.Title, &note.Content, &created, &updated, &note.CurrentRevID, &note.RevisionCount); err != nil {
 			return nil, err
@@ -151,43 +151,43 @@ func (s *Store) ListNotes(filter domain.NoteFilter) ([]domain.Note, error) {
 		if err != nil {
 			return nil, err
 		}
-		notes = append(notes, note)
+		result = append(result, note)
 	}
-	return notes, rows.Err()
+	return result, rows.Err()
 }
 
-func (s *Store) SaveNote(id, title, content string, tags []string) (domain.Note, error) {
+func (s *Store) SaveNote(id, title, content string, tags []string) (notes.Note, error) {
 	now := time.Now().UTC()
 	revID := revisionID(id, now)
 	tx, err := s.db.Begin()
 	if err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	defer tx.Rollback()
 	var exists int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM notes WHERE id = ? AND deleted_at IS NULL`, id).Scan(&exists); err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	if exists == 0 {
-		return domain.Note{}, sql.ErrNoRows
+		return notes.Note{}, sql.ErrNoRows
 	}
 	if _, err := tx.Exec(`INSERT INTO revisions (id, note_id, title, content, created_at) VALUES (?, ?, ?, ?, ?)`, revID, id, title, content, now.Format(time.RFC3339Nano)); err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	if _, err := tx.Exec(`INSERT INTO revision_search (revision_id, note_id, title, content) VALUES (?, ?, ?, ?)`, revID, id, title, content); err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	if _, err := tx.Exec(`UPDATE notes SET title = ?, current_revision_id = ?, updated_at = ? WHERE id = ?`, title, revID, now.Format(time.RFC3339Nano), id); err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	if err := replaceTags(tx, id, tags); err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	if err := pruneRevisions(tx, id, s.revisionRetention); err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	return s.GetNote(id)
 }
@@ -207,15 +207,15 @@ func (s *Store) DeleteNote(id string) error {
 	return nil
 }
 
-func (s *Store) ListRevisions(noteID string) ([]domain.Revision, error) {
+func (s *Store) ListRevisions(noteID string) ([]notes.Revision, error) {
 	rows, err := s.db.Query(`SELECT id, note_id, title, content, created_at FROM revisions WHERE note_id = ? ORDER BY created_at DESC`, noteID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var revisions []domain.Revision
+	var revisions []notes.Revision
 	for rows.Next() {
-		var revision domain.Revision
+		var revision notes.Revision
 		var created string
 		if err := rows.Scan(&revision.ID, &revision.NoteID, &revision.Title, &revision.Content, &created); err != nil {
 			return nil, err
@@ -229,15 +229,15 @@ func (s *Store) ListRevisions(noteID string) ([]domain.Revision, error) {
 	return revisions, rows.Err()
 }
 
-func (s *Store) RestoreRevision(noteID, revisionID string) (domain.Note, error) {
+func (s *Store) RestoreRevision(noteID, revisionID string) (notes.Note, error) {
 	row := s.db.QueryRow(`SELECT title, content FROM revisions WHERE id = ? AND note_id = ?`, revisionID, noteID)
 	var title, content string
 	if err := row.Scan(&title, &content); err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	note, err := s.GetNote(noteID)
 	if err != nil {
-		return domain.Note{}, err
+		return notes.Note{}, err
 	}
 	return s.SaveNote(noteID, title, content, note.Tags)
 }
@@ -271,16 +271,7 @@ func replaceTags(tx *sql.Tx, noteID string, tags []string) error {
 	if _, err := tx.Exec(`DELETE FROM note_tags WHERE note_id = ?`, noteID); err != nil {
 		return err
 	}
-	unique := make(map[string]struct{}, len(tags))
-	for _, raw := range tags {
-		tag := strings.ToLower(strings.TrimSpace(raw))
-		if tag == "" {
-			continue
-		}
-		if _, ok := unique[tag]; ok {
-			continue
-		}
-		unique[tag] = struct{}{}
+	for _, tag := range notes.NormalizeTags(tags) {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO tags (name) VALUES (?)`, tag); err != nil {
 			return err
 		}
@@ -325,4 +316,4 @@ func newID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", bytes[0:4], bytes[4:6], bytes[6:8], bytes[8:10], bytes[10:16])
 }
 
-var _ domain.NoteStore = (*Store)(nil)
+var _ notes.Repository = (*Store)(nil)

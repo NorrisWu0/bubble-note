@@ -3,7 +3,7 @@ package sqlite
 import (
 	"testing"
 
-	"github.com/norriswu0/bubble-note/internal/domain"
+	"github.com/norriswu0/bubble-note/internal/notes"
 )
 
 func TestSavePrunesOldRevisions(t *testing.T) {
@@ -47,14 +47,14 @@ func TestListNotesSearchesContentAndTags(t *testing.T) {
 	if _, err := store.CreateNote("work", "finish report", []string{"work"}); err != nil {
 		t.Fatal(err)
 	}
-	results, err := store.ListNotes(domain.NoteFilter{Query: "jasmine"})
+	results, err := store.ListNotes(notes.Filter{Query: "jasmine"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(results) != 1 || results[0].Title != "tea" {
 		t.Fatalf("content search returned %+v", results)
 	}
-	results, err = store.ListNotes(domain.NoteFilter{Tag: "work"})
+	results, err = store.ListNotes(notes.Filter{Tag: "work"})
 	if err != nil {
 		t.Fatal(err)
 	}

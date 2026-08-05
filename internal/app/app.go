@@ -1,20 +1,16 @@
 package app
 
 import (
-	"fmt"
-	"math/rand/v2"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/norriswu0/bubble-note/internal/config"
-	"github.com/norriswu0/bubble-note/internal/domain"
+	"github.com/norriswu0/bubble-note/internal/notes"
 	"github.com/norriswu0/bubble-note/internal/theme"
+	"github.com/norriswu0/bubble-note/internal/view"
 )
 
 type screen int
@@ -26,8 +22,8 @@ const (
 )
 
 type Model struct {
-	store          domain.NoteStore
-	notes          []domain.Note
+	service        *notes.Service
+	notes          []notes.Note
 	cursor         int
 	screen         screen
 	search         textinput.Model
@@ -35,7 +31,7 @@ type Model struct {
 	tags           textinput.Model
 	editor         textarea.Model
 	viewer         viewport.Model
-	viewNote       domain.Note
+	viewNote       notes.Note
 	searching      bool
 	editingID      string
 	dirty          bool
@@ -50,10 +46,10 @@ type Model struct {
 	savedTitle     string
 	savedTags      string
 	savedContent   string
-	savedNote      domain.Note
+	savedNote      notes.Note
 }
 
-func New(store domain.NoteStore, palettes ...theme.Palette) Model {
+func New(repository notes.Repository, palettes ...theme.Palette) Model {
 	search := textinput.New()
 	search.Placeholder = "search notes"
 	search.Prompt = "/ "
@@ -69,10 +65,10 @@ func New(store domain.NoteStore, palettes ...theme.Palette) Model {
 		palette = palettes[0]
 	}
 	viewer := viewport.New(80, 12)
-	return Model{store: store, search: search, title: title, tags: tags, editor: editor, viewer: viewer, palette: palette, indentSpaces: config.DefaultIndentSpaces}
+	return Model{service: notes.NewService(repository), search: search, title: title, tags: tags, editor: editor, viewer: viewer, palette: palette, indentSpaces: config.DefaultIndentSpaces}
 }
 
-func NewWithSettings(store domain.NoteStore, palette theme.Palette, indentSpaces int) Model {
+func NewWithSettings(store notes.Repository, palette theme.Palette, indentSpaces int) Model {
 	model := New(store, palette)
 	if indentSpaces > 0 {
 		model.indentSpaces = indentSpaces
@@ -85,17 +81,17 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) load() tea.Msg {
-	notes, err := m.store.ListNotes(parseFilter(m.search.Value()))
+	notes, err := m.service.List(parseFilter(m.search.Value()))
 	if err != nil {
 		return errMsg{err}
 	}
 	return notesLoadedMsg(notes)
 }
 
-type notesLoadedMsg []domain.Note
+type notesLoadedMsg []notes.Note
 
 type savedMsg struct {
-	note domain.Note
+	note notes.Note
 }
 
 type errMsg struct{ err error }
@@ -180,7 +176,7 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor++
 		}
 	case "n":
-		m.beginEdit(domain.Note{Title: generatedTitle(), Content: ""})
+		m.beginEdit(notes.Note{Title: generatedTitle(), Content: ""})
 	case "enter":
 		if len(m.notes) > 0 {
 			m.beginView(m.notes[m.cursor])
@@ -191,7 +187,7 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case "d":
 		if len(m.notes) > 0 {
-			if err := m.store.DeleteNote(m.notes[m.cursor].ID); err != nil {
+			if err := m.service.Delete(m.notes[m.cursor].ID); err != nil {
 				m.status = "Error: " + err.Error()
 			} else {
 				m.status = "Deleted"
@@ -298,12 +294,12 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) save() tea.Msg {
 	tags := strings.Split(m.tags.Value(), ",")
-	var note domain.Note
+	var note notes.Note
 	var err error
 	if m.editingID == "" {
-		note, err = m.store.CreateNote(m.title.Value(), m.editor.Value(), tags)
+		note, err = m.service.Create(m.title.Value(), m.editor.Value(), tags)
 	} else {
-		note, err = m.store.SaveNote(m.editingID, m.title.Value(), m.editor.Value(), tags)
+		note, err = m.service.Save(m.editingID, m.title.Value(), m.editor.Value(), tags)
 	}
 	if err != nil {
 		return errMsg{err}
@@ -311,7 +307,7 @@ func (m Model) save() tea.Msg {
 	return savedMsg{note}
 }
 
-func (m *Model) beginEdit(note domain.Note) {
+func (m *Model) beginEdit(note notes.Note) {
 	m.screen = editScreen
 	m.editingID = note.ID
 	m.title.SetValue(note.Title)
@@ -330,33 +326,13 @@ func (m *Model) beginEdit(note domain.Note) {
 	m.status = ""
 }
 
-func (m *Model) beginView(note domain.Note) {
+func (m *Model) beginView(note notes.Note) {
 	m.screen = viewScreen
 	m.viewNote = note
 	m.confirmingExit = false
-	m.viewer.SetContent(m.renderMarkdown(note.Content))
+	m.viewer.SetContent(view.RenderMarkdown(view.Note{Title: note.Title, Content: note.Content}, m.contentWidth()-4))
 	m.resizeViewer()
 	m.viewer.GotoTop()
-}
-
-func (m Model) renderMarkdown(content string) string {
-	width := m.contentWidth() - 4
-	if width < 20 {
-		width = 20
-	}
-	renderer, err := glamour.NewTermRenderer(
-		// Avoid Glamour's terminal background probe; it can block in an alternate-screen TUI.
-		glamour.WithStandardStyle("dark"),
-		glamour.WithWordWrap(width),
-	)
-	if err != nil {
-		return content
-	}
-	rendered, err := renderer.Render(content)
-	if err != nil {
-		return content
-	}
-	return strings.TrimSpace(rendered)
 }
 
 func (m Model) isTainted() bool {
@@ -417,167 +393,16 @@ func (m *Model) resizeViewer() {
 	m.viewer.Width = m.contentWidth() - 2
 	m.viewer.Height = m.contentHeight() - 2
 	if m.screen == viewScreen {
-		m.viewer.SetContent(m.renderMarkdown(m.viewNote.Content))
+		m.viewer.SetContent(view.RenderMarkdown(view.Note{Title: m.viewNote.Title, Content: m.viewNote.Content}, m.contentWidth()-4))
 	}
-}
-
-func (m Model) View() string {
-	if m.screen == editScreen {
-		return m.editorView()
-	}
-	if m.screen == viewScreen {
-		return m.viewView()
-	}
-	return m.listView()
-}
-
-func (m Model) listView() string {
-	header := m.topBar("", fmt.Sprintf("%d notes", len(m.notes)))
-	searchLine := ""
-	if m.searching {
-		searchLine = m.search.View()
-	} else if m.search.Value() != "" {
-		searchLine = m.muted("Search: " + m.search.Value())
-	}
-	var body strings.Builder
-	if len(m.notes) == 0 {
-		body.WriteString("No notes found. Press n to create one.\n")
-	}
-	for i, note := range m.notes {
-		marker := "  "
-		if i == m.cursor {
-			marker = ">>"
-		}
-		line := fmt.Sprintf("%s %-28s %s", marker, truncate(note.Title, 28), note.UpdatedAt.Local().Format("2006-01-02 15:04"))
-		if i == m.cursor {
-			line = m.selected(line)
-		}
-		body.WriteString(line + "\n")
-		if i == m.cursor {
-			body.WriteString("   " + m.muted(truncate(strings.ReplaceAll(note.Content, "\n", " "), m.contentWidth()-8)) + "\n")
-			if len(note.Tags) > 0 {
-				body.WriteString("   " + m.tag("#"+strings.Join(note.Tags, " #")) + "\n")
-			}
-		}
-	}
-	content := body.String()
-	if searchLine != "" {
-		content = searchLine + "\n\n" + content
-	}
-	main := m.panel(content, m.contentHeight())
-	footerText := "n new   enter view   e edit   / search   d delete   q quit"
-	if m.status != "" {
-		footerText = m.status + "   |   " + footerText
-	}
-	return header + "\n" + main + "\n" + m.footBar(footerText)
-}
-
-func (m Model) editorView() string {
-	state := "SAVED"
-	if m.dirty {
-		state = "UNSAVED"
-	}
-	header := m.topBar(m.title.Value(), state)
-	metadata := m.field("TITLE", m.title.View(), m.focus == 0) + "\n" + m.field("TAGS", m.tags.View(), m.focus == 1)
-	body := m.panel(m.field("BODY", m.editor.View(), m.focus == 2), m.editorHeight(), m.focus == 2)
-	content := metadata + "\n\n" + body
-	footerText := "ctrl-s save   tab indent   shift-tab previous   esc view"
-	if m.status != "" {
-		footerText = m.status + "   |   " + footerText
-	}
-	if m.confirmingExit {
-		footerText = "UNSAVED CHANGES   [s] Save   [d] Discard   [c] Cancel"
-	}
-	return header + "\n" + content + "\n" + m.footBar(footerText)
-}
-
-func (m Model) viewView() string {
-	header := m.topBar(m.viewNote.Title, "SAVED")
-	metadata := m.field("TAGS", m.tagList(m.viewNote.Tags), false)
-	body := m.panel(m.viewer.View(), m.contentHeight(), false)
-	footer := m.footBar("e edit   up/down scroll   esc back   q quit")
-	return header + "\n" + metadata + "\n" + body + "\n" + footer
-}
-
-func (m Model) tagList(tags []string) string {
-	if len(tags) == 0 {
-		return m.muted("no tags")
-	}
-	return m.tag("#" + strings.Join(tags, " #"))
-}
-
-func (m Model) topBar(noteTitle, state string) string {
-	width := m.viewWidth()
-	left := " bubble-note"
-	if noteTitle != "" {
-		left += " / " + truncate(noteTitle, width/2)
-	}
-	right := state
-	if right != "" {
-		right = "[" + right + "]"
-	}
-	gap := width - lipgloss.Width(left) - lipgloss.Width(right) - 1
-	if gap < 1 {
-		gap = 1
-	}
-	line := left + strings.Repeat(" ", gap) + right
-	style := lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color(m.palette.Text)).Background(lipgloss.Color(m.palette.Surface)).Bold(true)
-	if state == "UNSAVED" {
-		style = style.Foreground(lipgloss.Color(m.palette.Primary))
-	}
-	return style.Render(line)
-}
-
-func (m Model) footBar(text string) string {
-	text = truncate(text, m.viewWidth()-1)
-	style := lipgloss.NewStyle().Width(m.viewWidth()).Foreground(lipgloss.Color(m.palette.Muted)).BorderTop(true).BorderForeground(lipgloss.Color(m.palette.Border))
-	if strings.HasPrefix(text, "UNSAVED") {
-		style = style.Foreground(lipgloss.Color(m.palette.Primary)).Bold(true)
-	}
-	return style.Render(" " + text)
-}
-
-func (m Model) field(label, value string, active bool) string {
-	color := m.palette.Muted
-	if active {
-		color = m.palette.Primary
-	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(active).Render(label) + "\n" + value
-}
-
-func (m Model) panel(content string, height int, active ...bool) string {
-	border := m.palette.Border
-	if len(active) > 0 && active[0] {
-		border = m.palette.Primary
-	}
-	style := lipgloss.NewStyle().Width(m.contentWidth()).Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(border)).Padding(0, 1)
-	if height > 0 {
-		style = style.Height(height)
-	}
-	return style.Render(content)
-}
-
-func (m Model) selected(value string) string {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette.Selected)).Bold(true).Render(value)
-}
-
-func (m Model) muted(value string) string {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette.Muted)).Render(value)
-}
-
-func (m Model) tag(value string) string {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette.Secondary)).Render(value)
-}
-
-func (m Model) viewWidth() int {
-	if m.width <= 0 {
-		return 80
-	}
-	return m.width
 }
 
 func (m Model) contentWidth() int {
-	width := m.viewWidth() - 2
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+	width -= 2
 	if width < 16 {
 		return 16
 	}
@@ -594,61 +419,34 @@ func (m Model) contentHeight() int {
 	return m.height - 5
 }
 
-func (m Model) editorHeight() int {
-	if m.height <= 0 {
-		return 5
-	}
-	height := m.height - 10
-	if height < 5 {
-		return 5
-	}
-	return height
-}
-
-func generatedTitle() string {
-	adjectives := []string{"amber", "brisk", "calm", "clever", "cosmic", "gentle", "quiet", "tiny"}
-	animals := []string{"badger", "cat", "fox", "otter", "panda", "rabbit", "shiba", "tiger"}
-	return adjectives[rand.IntN(len(adjectives))] + "-" + animals[rand.IntN(len(animals))]
-}
-
-func parseFilter(value string) domain.NoteFilter {
-	filter := domain.NoteFilter{}
-	var content []string
-	for _, token := range strings.Fields(value) {
-		parts := strings.SplitN(token, ":", 2)
-		if len(parts) != 2 {
-			content = append(content, token)
-			continue
+func (m Model) View() string {
+	switch m.screen {
+	case editScreen:
+		return view.RenderEditor(view.EditorModel{
+			Width: m.width, Height: m.height, Title: m.title.Value(), TitleView: m.title.View(), TagsView: m.tags.View(), BodyView: m.editor.View(),
+			TitleActive: m.focus == 0, TagsActive: m.focus == 1, BodyActive: m.focus == 2,
+			State: func() string {
+				if m.dirty {
+					return "UNSAVED"
+				}
+				return "SAVED"
+			}(), Status: m.status, ConfirmingExit: m.confirmingExit,
+		}, m.palette)
+	case viewScreen:
+		return view.RenderReader(view.ReaderModel{Width: m.width, Height: m.height, Title: m.viewNote.Title, Tags: m.viewNote.Tags, Body: m.viewer.View()}, m.palette)
+	default:
+		rows := make([]view.NoteRow, len(m.notes))
+		for i, note := range m.notes {
+			rows[i] = view.NoteRow{Title: note.Title, Updated: note.UpdatedAt.Local().Format("2006-01-02 15:04"), Excerpt: note.Content, Tags: note.Tags, Selected: i == m.cursor}
 		}
-		switch parts[0] {
-		case "tag":
-			filter.Tag = parts[1]
-		case "after":
-			if date, err := time.Parse("2006-01-02", parts[1]); err == nil {
-				filter.From = &date
-			}
-		case "before":
-			if date, err := time.Parse("2006-01-02", parts[1]); err == nil {
-				filter.Through = &date
-			}
-		default:
-			content = append(content, token)
+		searchInput := ""
+		if m.searching {
+			searchInput = m.search.View()
 		}
+		return view.RenderList(view.ListModel{Width: m.width, Height: m.height, Count: len(m.notes), Search: m.search.Value(), SearchInput: searchInput, Rows: rows, Status: m.status}, m.palette)
 	}
-	filter.Query = strings.Join(content, " ")
-	return filter
 }
 
-func truncate(value string, width int) string {
-	runes := []rune(value)
-	if width <= 0 {
-		return ""
-	}
-	if len(runes) <= width {
-		return value
-	}
-	if width <= 3 {
-		return string(runes[:width])
-	}
-	return string(runes[:width-3]) + "..."
-}
+func generatedTitle() string { return notes.GeneratedTitle() }
+
+func parseFilter(value string) notes.Filter { return notes.ParseFilter(value) }

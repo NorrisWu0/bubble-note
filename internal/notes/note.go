@@ -1,7 +1,8 @@
-package domain
+package notes
 
 import "time"
 
+// Note is the business representation of a note and its current revision.
 type Note struct {
 	ID            string
 	Title         string
@@ -21,20 +22,19 @@ type Revision struct {
 	CreatedAt time.Time
 }
 
-type NoteFilter struct {
+type Filter struct {
 	Query   string
 	Tag     string
 	From    *time.Time
 	Through *time.Time
 }
 
-type NoteStore interface {
+type Repository interface {
 	CreateNote(title, content string, tags []string) (Note, error)
 	GetNote(id string) (Note, error)
-	ListNotes(filter NoteFilter) ([]Note, error)
+	ListNotes(filter Filter) ([]Note, error)
 	SaveNote(id, title, content string, tags []string) (Note, error)
 	DeleteNote(id string) error
 	ListRevisions(noteID string) ([]Revision, error)
 	RestoreRevision(noteID, revisionID string) (Note, error)
-	Close() error
 }

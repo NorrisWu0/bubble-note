@@ -137,3 +137,11 @@ make test
 make check
 make clean
 ```
+
+## Architecture
+
+- `internal/notes` contains note schemas, business rules, repository interfaces, and the note service.
+- `internal/view` contains display models, layout, Markdown rendering, and terminal presentation.
+- `internal/app` coordinates Bubble Tea events, service calls, and view rendering.
+- `internal/database` contains the SQLite persistence adapter.
+- `internal/storage` reserves the optional remote S3-compatible storage layer.

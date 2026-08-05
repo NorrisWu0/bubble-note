@@ -8,45 +8,45 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/norriswu0/bubble-note/internal/domain"
+	"github.com/norriswu0/bubble-note/internal/notes"
 )
 
 type behaviorStore struct {
-	note        domain.Note
+	note        notes.Note
 	saveCount   int
 	createCount int
 	failSave    bool
 }
 
-func (s *behaviorStore) CreateNote(title, content string, tags []string) (domain.Note, error) {
+func (s *behaviorStore) CreateNote(title, content string, tags []string) (notes.Note, error) {
 	s.createCount++
-	s.note = domain.Note{ID: "created", Title: title, Content: content, Tags: tags}
+	s.note = notes.Note{ID: "created", Title: title, Content: content, Tags: tags}
 	return s.note, nil
 }
 
-func (s *behaviorStore) GetNote(string) (domain.Note, error) { return s.note, nil }
+func (s *behaviorStore) GetNote(string) (notes.Note, error) { return s.note, nil }
 
-func (s *behaviorStore) ListNotes(domain.NoteFilter) ([]domain.Note, error) {
+func (s *behaviorStore) ListNotes(notes.Filter) ([]notes.Note, error) {
 	if s.note.ID == "" {
 		return nil, nil
 	}
-	return []domain.Note{s.note}, nil
+	return []notes.Note{s.note}, nil
 }
 
-func (s *behaviorStore) SaveNote(id, title, content string, tags []string) (domain.Note, error) {
+func (s *behaviorStore) SaveNote(id, title, content string, tags []string) (notes.Note, error) {
 	s.saveCount++
 	if s.failSave {
-		return domain.Note{}, errors.New("save failed")
+		return notes.Note{}, errors.New("save failed")
 	}
-	s.note = domain.Note{ID: id, Title: title, Content: content, Tags: tags}
+	s.note = notes.Note{ID: id, Title: title, Content: content, Tags: tags}
 	return s.note, nil
 }
 
 func (s *behaviorStore) DeleteNote(string) error { return nil }
 
-func (s *behaviorStore) ListRevisions(string) ([]domain.Revision, error) { return nil, nil }
+func (s *behaviorStore) ListRevisions(string) ([]notes.Revision, error) { return nil, nil }
 
-func (s *behaviorStore) RestoreRevision(string, string) (domain.Note, error) { return s.note, nil }
+func (s *behaviorStore) RestoreRevision(string, string) (notes.Note, error) { return s.note, nil }
 
 func (s *behaviorStore) Close() error { return nil }
 
@@ -56,7 +56,7 @@ type noteBehavior struct {
 }
 
 func openSavedNote() noteBehavior {
-	store := &behaviorStore{note: domain.Note{
+	store := &behaviorStore{note: notes.Note{
 		ID:        "note-1",
 		Title:     "quiet-cat",
 		Content:   "original body",
@@ -184,7 +184,7 @@ func TestUserCanTypeQWhileEditing(t *testing.T) {
 func TestUserCanReadRenderedNoteBeforeEditing(t *testing.T) {
 	note := openSavedNote()
 	note.model.screen = listScreen
-	note.model.notes = []domain.Note{note.store.note}
+	note.model.notes = []notes.Note{note.store.note}
 	note.press(tea.KeyMsg{Type: tea.KeyEnter})
 	if note.model.screen != viewScreen {
 		t.Fatal("opening a note should show rendered view mode")
