@@ -1,1 +1,8 @@
 revision_retention: 14
+indent_spaces: 2
+
+theme:
+  preset: catppuccin
+  flavor: mocha
+  overrides:
+    primary: "#F5A97F"

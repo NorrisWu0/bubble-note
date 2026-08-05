@@ -2,10 +2,12 @@ package app
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/norriswu0/bubble-note/internal/domain"
 )
 
@@ -68,17 +70,19 @@ func openSavedNote() noteBehavior {
 }
 
 func (b *noteBehavior) editTitle() {
+	b.press(tea.KeyMsg{Type: tea.KeyEsc})
+	b.press(tea.KeyMsg{Type: tea.KeyShiftTab})
+	b.press(tea.KeyMsg{Type: tea.KeyShiftTab})
 	b.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" updated")})
 }
 
 func (b *noteBehavior) editTags() {
-	b.press(tea.KeyMsg{Type: tea.KeyTab})
+	b.press(tea.KeyMsg{Type: tea.KeyEsc})
+	b.press(tea.KeyMsg{Type: tea.KeyShiftTab})
 	b.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(", urgent")})
 }
 
 func (b *noteBehavior) editBody() {
-	b.press(tea.KeyMsg{Type: tea.KeyTab})
-	b.press(tea.KeyMsg{Type: tea.KeyTab})
 	b.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" more")})
 }
 
@@ -160,6 +164,9 @@ func TestUserIsWarnedBeforeLeavingAnEditedNote(t *testing.T) {
 			note := openSavedNote()
 			note.editBody()
 			note.press(exit.key)
+			if exit.name == "escape" {
+				note.press(tea.KeyMsg{Type: tea.KeyEsc})
+			}
 			note.expectUnsavedPrompt(t)
 		})
 	}
@@ -181,7 +188,8 @@ func TestUserCanTypeQWhileEditing(t *testing.T) {
 
 func TestUserCanMoveBackToThePreviousField(t *testing.T) {
 	note := openSavedNote()
-	note.press(tea.KeyMsg{Type: tea.KeyTab})
+	note.press(tea.KeyMsg{Type: tea.KeyEsc})
+	note.press(tea.KeyMsg{Type: tea.KeyShiftTab})
 	note.press(tea.KeyMsg{Type: tea.KeyShiftTab})
 	note.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
 	if note.model.title.Value() != "quiet-cat!" {
@@ -192,9 +200,18 @@ func TestUserCanMoveBackToThePreviousField(t *testing.T) {
 	}
 }
 
+func TestUserCanIndentWhileEditingTheBody(t *testing.T) {
+	note := openSavedNote()
+	note.press(tea.KeyMsg{Type: tea.KeyTab})
+	if !strings.HasSuffix(note.model.editor.Value(), "  ") {
+		t.Fatal("tab should insert indentation while editing the body")
+	}
+}
+
 func TestUserCanDiscardEditedChanges(t *testing.T) {
 	note := openSavedNote()
 	note.editBody()
+	note.press(tea.KeyMsg{Type: tea.KeyEsc})
 	note.press(tea.KeyMsg{Type: tea.KeyEsc})
 	note.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
 	if note.model.screen != listScreen {
@@ -209,6 +226,7 @@ func TestUserCanCancelLeavingAnEditedNote(t *testing.T) {
 	note := openSavedNote()
 	note.editBody()
 	note.press(tea.KeyMsg{Type: tea.KeyEsc})
+	note.press(tea.KeyMsg{Type: tea.KeyEsc})
 	note.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
 	if note.model.screen != editScreen {
 		t.Fatal("cancelling should keep the note open")
@@ -221,6 +239,7 @@ func TestUserCanCancelLeavingAnEditedNote(t *testing.T) {
 func TestUserCanSaveWhileLeavingAnEditedNote(t *testing.T) {
 	note := openSavedNote()
 	note.editBody()
+	note.press(tea.KeyMsg{Type: tea.KeyEsc})
 	note.press(tea.KeyMsg{Type: tea.KeyEsc})
 	note.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
 	if note.model.screen != listScreen {
@@ -271,4 +290,51 @@ func TestGeneratedTitle(t *testing.T) {
 		}
 	}
 	t.Fatalf("generated title = %q, want adjective-animal format", title)
+}
+
+func TestEditorFrameShowsNoteStateAndKeyHints(t *testing.T) {
+	note := openSavedNote()
+	note.model.width = 80
+	note.model.height = 24
+	note.editBody()
+	view := note.model.View()
+	for _, text := range []string{
+		"bubble-note / quiet-cat",
+		"[UNSAVED]",
+		"ctrl-s save",
+		"tab indent",
+	} {
+		if !strings.Contains(view, text) {
+			t.Fatalf("view does not contain %q:\n%s", text, view)
+		}
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if lipgloss.Width(line) > 80 {
+			t.Fatalf("line is %d columns wide, want at most 80: %q", lipgloss.Width(line), line)
+		}
+	}
+}
+
+func TestEditorFrameShowsHowToEnterBodyEditing(t *testing.T) {
+	note := openSavedNote()
+	note.press(tea.KeyMsg{Type: tea.KeyEsc})
+	view := note.model.View()
+	if !strings.Contains(view, "BODY  [press Enter to edit]") {
+		t.Fatalf("view does not explain body editing:\n%s", view)
+	}
+	if !strings.Contains(view, "enter edit body") {
+		t.Fatalf("view does not show body edit keybinding:\n%s", view)
+	}
+}
+
+func TestEditorFrameFitsANarrowTerminal(t *testing.T) {
+	note := openSavedNote()
+	note.model.width = 40
+	note.model.height = 16
+	view := note.model.View()
+	for _, line := range strings.Split(view, "\n") {
+		if lipgloss.Width(line) > 40 {
+			t.Fatalf("line is %d columns wide, want at most 40: %q", lipgloss.Width(line), line)
+		}
+	}
 }

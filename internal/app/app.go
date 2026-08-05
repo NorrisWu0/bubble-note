@@ -10,7 +10,9 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/norriswu0/bubble-note/internal/config"
 	"github.com/norriswu0/bubble-note/internal/domain"
+	"github.com/norriswu0/bubble-note/internal/theme"
 )
 
 type screen int
@@ -34,8 +36,11 @@ type Model struct {
 	dirty          bool
 	status         string
 	focus          int
+	bodyEditing    bool
 	width          int
 	height         int
+	palette        theme.Palette
+	indentSpaces   int
 	confirmingExit bool
 	saveThenExit   bool
 	savedTitle     string
@@ -43,7 +48,7 @@ type Model struct {
 	savedContent   string
 }
 
-func New(store domain.NoteStore) Model {
+func New(store domain.NoteStore, palettes ...theme.Palette) Model {
 	search := textinput.New()
 	search.Placeholder = "search notes"
 	search.Prompt = "/ "
@@ -54,7 +59,19 @@ func New(store domain.NoteStore) Model {
 	editor := textarea.New()
 	editor.Prompt = "  "
 	editor.ShowLineNumbers = true
-	return Model{store: store, search: search, title: title, tags: tags, editor: editor}
+	palette := theme.Default()
+	if len(palettes) > 0 {
+		palette = palettes[0]
+	}
+	return Model{store: store, search: search, title: title, tags: tags, editor: editor, palette: palette, indentSpaces: config.DefaultIndentSpaces}
+}
+
+func NewWithSettings(store domain.NoteStore, palette theme.Palette, indentSpaces int) Model {
+	model := New(store, palette)
+	if indentSpaces > 0 {
+		model.indentSpaces = indentSpaces
+	}
+	return model
 }
 
 func (m Model) Init() tea.Cmd {
@@ -202,6 +219,11 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "ctrl+c", "esc":
+			if key.String() == "esc" && m.bodyEditing {
+				m.bodyEditing = false
+				m.editor.Blur()
+				return m, nil
+			}
 			if m.dirty {
 				m.confirmingExit = true
 				m.blurEditor()
@@ -219,11 +241,25 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.save
 		case "tab":
+			if m.bodyEditing {
+				m.editor.InsertString(strings.Repeat(" ", m.indentSpaces))
+				m.dirty = m.isTainted()
+				return m, nil
+			}
 			m.focusEditor((m.focus + 1) % 3)
 			return m, nil
 		case "shift+tab":
+			if m.bodyEditing {
+				break
+			}
 			m.focusEditor((m.focus + 2) % 3)
 			return m, nil
+		case "enter":
+			if m.focus == 2 && !m.bodyEditing {
+				m.bodyEditing = true
+				m.editor.Focus()
+				return m, nil
+			}
 		}
 	}
 	var cmds []tea.Cmd
@@ -234,6 +270,9 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case 1:
 		m.tags, cmd = m.tags.Update(msg)
 	case 2:
+		if !m.bodyEditing {
+			return m, nil
+		}
 		m.editor, cmd = m.editor.Update(msg)
 	}
 	cmds = append(cmds, cmd)
@@ -262,8 +301,11 @@ func (m *Model) beginEdit(note domain.Note) {
 	m.title.SetValue(note.Title)
 	m.tags.SetValue(strings.Join(note.Tags, ", "))
 	m.editor.SetValue(note.Content)
-	m.title.Focus()
-	m.focus = 0
+	m.focus = 2
+	m.bodyEditing = true
+	m.title.Blur()
+	m.tags.Blur()
+	m.editor.Focus()
 	m.savedTitle = note.Title
 	m.savedTags = strings.Join(note.Tags, ", ")
 	m.savedContent = note.Content
@@ -299,14 +341,16 @@ func (m *Model) focusEditor(field int) {
 	case 1:
 		m.tags.Focus()
 	case 2:
-		m.editor.Focus()
+		if m.bodyEditing {
+			m.editor.Focus()
+		}
 	}
 }
 
 func (m *Model) resizeInputs() {
 	width := m.width - 4
-	if width < 20 {
-		width = 20
+	if width < 12 {
+		width = 12
 	}
 	m.title.Width = width
 	m.tags.Width = width
@@ -326,57 +370,171 @@ func (m Model) View() string {
 }
 
 func (m Model) listView() string {
-	header := titleStyle.Render("bubble-note") + "  " + mutedStyle.Render("local Markdown notes")
+	header := m.topBar("", fmt.Sprintf("%d notes", len(m.notes)))
+	searchLine := ""
 	if m.searching {
-		header += "\n" + m.search.View()
+		searchLine = m.search.View()
 	} else if m.search.Value() != "" {
-		header += "\n" + mutedStyle.Render("Search: "+m.search.Value())
+		searchLine = m.muted("Search: " + m.search.Value())
 	}
 	var body strings.Builder
 	if len(m.notes) == 0 {
-		body.WriteString("\n  No notes found. Press n to create one.\n")
+		body.WriteString("No notes found. Press n to create one.\n")
 	}
 	for i, note := range m.notes {
 		marker := "  "
 		if i == m.cursor {
-			marker = "> "
+			marker = ">>"
 		}
-		line := fmt.Sprintf("%s%-28s %s", marker, note.Title, note.UpdatedAt.Local().Format("2006-01-02 15:04"))
+		line := fmt.Sprintf("%s %-28s %s", marker, truncate(note.Title, 28), note.UpdatedAt.Local().Format("2006-01-02 15:04"))
 		if i == m.cursor {
-			line = selectedStyle.Render(line)
+			line = m.selected(line)
 		}
 		body.WriteString(line + "\n")
 		if i == m.cursor {
-			body.WriteString("    " + truncate(strings.ReplaceAll(note.Content, "\n", " "), 80) + "\n")
+			body.WriteString("   " + m.muted(truncate(strings.ReplaceAll(note.Content, "\n", " "), m.contentWidth()-8)) + "\n")
 			if len(note.Tags) > 0 {
-				body.WriteString("    " + mutedStyle.Render("#"+strings.Join(note.Tags, " #")) + "\n")
+				body.WriteString("   " + m.tag("#"+strings.Join(note.Tags, " #")) + "\n")
 			}
 		}
 	}
-	footer := mutedStyle.Render("n new  e/enter edit  / search  d delete  q quit")
-	if m.status != "" {
-		footer += "\n" + m.status
+	content := body.String()
+	if searchLine != "" {
+		content = searchLine + "\n\n" + content
 	}
-	return header + "\n\n" + body.String() + "\n" + footer + "\n"
+	main := m.panel(content, m.contentHeight())
+	footerText := "n new   enter edit   / search   d delete   q quit"
+	if m.status != "" {
+		footerText = m.status + "   |   " + footerText
+	}
+	return header + "\n" + main + "\n" + m.footBar(footerText)
 }
 
 func (m Model) editorView() string {
-	mode := "new note"
-	if m.editingID != "" {
-		mode = "editing " + m.editingID[:8]
-	}
-	state := "saved"
+	state := "SAVED"
 	if m.dirty {
-		state = "unsaved"
+		state = "UNSAVED"
 	}
-	footer := mutedStyle.Render("ctrl+s save  tab next field  esc back")
+	header := m.topBar(m.title.Value(), state)
+	metadata := m.field("TITLE", m.title.View(), m.focus == 0) + "\n" + m.field("TAGS", m.tags.View(), m.focus == 1)
+	bodyLabel := "BODY"
+	if m.bodyEditing {
+		bodyLabel += "  [editing]"
+	} else if m.focus == 2 {
+		bodyLabel += "  [press Enter to edit]"
+	}
+	body := m.panel(m.field(bodyLabel, m.editor.View(), m.focus == 2), m.editorHeight(), m.focus == 2)
+	content := metadata + "\n\n" + body
+	footerText := "tab next field   shift-tab previous   enter edit body   esc back"
+	if m.bodyEditing {
+		footerText = "ctrl-s save   tab indent   esc stop body editing"
+	}
 	if m.status != "" {
-		footer += "\n" + m.status
+		footerText = m.status + "   |   " + footerText
 	}
 	if m.confirmingExit {
-		footer += "\n" + titleStyle.Render("Unsaved changes: [s] Save  [d] Discard  [c] Cancel")
+		footerText = "UNSAVED CHANGES   [s] Save   [d] Discard   [c] Cancel"
 	}
-	return titleStyle.Render(mode) + "  " + mutedStyle.Render(state) + "\n\n" + m.title.View() + "\n" + m.tags.View() + "\n\n" + m.editor.View() + "\n" + footer + "\n"
+	return header + "\n" + content + "\n" + m.footBar(footerText)
+}
+
+func (m Model) topBar(noteTitle, state string) string {
+	width := m.viewWidth()
+	left := " bubble-note"
+	if noteTitle != "" {
+		left += " / " + truncate(noteTitle, width/2)
+	}
+	right := state
+	if right != "" {
+		right = "[" + right + "]"
+	}
+	gap := width - lipgloss.Width(left) - lipgloss.Width(right) - 1
+	if gap < 1 {
+		gap = 1
+	}
+	line := left + strings.Repeat(" ", gap) + right
+	style := lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color(m.palette.Text)).Background(lipgloss.Color(m.palette.Surface)).Bold(true)
+	if state == "UNSAVED" {
+		style = style.Foreground(lipgloss.Color(m.palette.Primary))
+	}
+	return style.Render(line)
+}
+
+func (m Model) footBar(text string) string {
+	text = truncate(text, m.viewWidth()-1)
+	style := lipgloss.NewStyle().Width(m.viewWidth()).Foreground(lipgloss.Color(m.palette.Muted)).BorderTop(true).BorderForeground(lipgloss.Color(m.palette.Border))
+	if strings.HasPrefix(text, "UNSAVED") {
+		style = style.Foreground(lipgloss.Color(m.palette.Primary)).Bold(true)
+	}
+	return style.Render(" " + text)
+}
+
+func (m Model) field(label, value string, active bool) string {
+	color := m.palette.Muted
+	if active {
+		color = m.palette.Primary
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(active).Render(label) + "\n" + value
+}
+
+func (m Model) panel(content string, height int, active ...bool) string {
+	border := m.palette.Border
+	if len(active) > 0 && active[0] {
+		border = m.palette.Primary
+	}
+	style := lipgloss.NewStyle().Width(m.contentWidth()).Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(border)).Padding(0, 1)
+	if height > 0 {
+		style = style.Height(height)
+	}
+	return style.Render(content)
+}
+
+func (m Model) selected(value string) string {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette.Selected)).Bold(true).Render(value)
+}
+
+func (m Model) muted(value string) string {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette.Muted)).Render(value)
+}
+
+func (m Model) tag(value string) string {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette.Secondary)).Render(value)
+}
+
+func (m Model) viewWidth() int {
+	if m.width <= 0 {
+		return 80
+	}
+	return m.width
+}
+
+func (m Model) contentWidth() int {
+	width := m.viewWidth() - 2
+	if width < 16 {
+		return 16
+	}
+	return width
+}
+
+func (m Model) contentHeight() int {
+	if m.height <= 0 {
+		return 12
+	}
+	if m.height-5 < 3 {
+		return 3
+	}
+	return m.height - 5
+}
+
+func (m Model) editorHeight() int {
+	if m.height <= 0 {
+		return 5
+	}
+	height := m.height - 10
+	if height < 5 {
+		return 5
+	}
+	return height
 }
 
 func generatedTitle() string {
@@ -415,12 +573,14 @@ func parseFilter(value string) domain.NoteFilter {
 
 func truncate(value string, width int) string {
 	runes := []rune(value)
+	if width <= 0 {
+		return ""
+	}
 	if len(runes) <= width {
 		return value
 	}
+	if width <= 3 {
+		return string(runes[:width])
+	}
 	return string(runes[:width-3]) + "..."
 }
-
-var titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F5A65B"))
-var selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#F5A65B"))
-var mutedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
