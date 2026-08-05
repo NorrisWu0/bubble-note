@@ -8,7 +8,9 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/norriswu0/bubble-note/internal/config"
 	"github.com/norriswu0/bubble-note/internal/domain"
@@ -19,6 +21,7 @@ type screen int
 
 const (
 	listScreen screen = iota
+	viewScreen
 	editScreen
 )
 
@@ -31,12 +34,13 @@ type Model struct {
 	title          textinput.Model
 	tags           textinput.Model
 	editor         textarea.Model
+	viewer         viewport.Model
+	viewNote       domain.Note
 	searching      bool
 	editingID      string
 	dirty          bool
 	status         string
 	focus          int
-	bodyEditing    bool
 	width          int
 	height         int
 	palette        theme.Palette
@@ -46,6 +50,7 @@ type Model struct {
 	savedTitle     string
 	savedTags      string
 	savedContent   string
+	savedNote      domain.Note
 }
 
 func New(store domain.NoteStore, palettes ...theme.Palette) Model {
@@ -63,7 +68,8 @@ func New(store domain.NoteStore, palettes ...theme.Palette) Model {
 	if len(palettes) > 0 {
 		palette = palettes[0]
 	}
-	return Model{store: store, search: search, title: title, tags: tags, editor: editor, palette: palette, indentSpaces: config.DefaultIndentSpaces}
+	viewer := viewport.New(80, 12)
+	return Model{store: store, search: search, title: title, tags: tags, editor: editor, viewer: viewer, palette: palette, indentSpaces: config.DefaultIndentSpaces}
 }
 
 func NewWithSettings(store domain.NoteStore, palette theme.Palette, indentSpaces int) Model {
@@ -105,6 +111,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.savedTitle = msg.note.Title
 		m.savedTags = strings.Join(msg.note.Tags, ", ")
 		m.savedContent = msg.note.Content
+		m.savedNote = msg.note
 		m.title.SetValue(m.savedTitle)
 		m.tags.SetValue(m.savedTags)
 		m.editor.SetValue(m.savedContent)
@@ -128,6 +135,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.screen == editScreen {
 		return m.updateEditor(msg)
+	}
+	if m.screen == viewScreen {
+		return m.updateView(msg)
 	}
 	if m.searching {
 		return m.updateSearch(msg)
@@ -171,7 +181,11 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case "n":
 		m.beginEdit(domain.Note{Title: generatedTitle(), Content: ""})
-	case "enter", "e":
+	case "enter":
+		if len(m.notes) > 0 {
+			m.beginView(m.notes[m.cursor])
+		}
+	case "e":
 		if len(m.notes) > 0 {
 			m.beginEdit(m.notes[m.cursor])
 		}
@@ -193,6 +207,25 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.load
 	}
 	return m, nil
+}
+
+func (m Model) updateView(msg tea.Msg) (tea.Model, tea.Cmd) {
+	key, ok := msg.(tea.KeyMsg)
+	if ok {
+		switch key.String() {
+		case "ctrl+c", "q":
+			return m, tea.Quit
+		case "e":
+			m.beginEdit(m.viewNote)
+			return m, nil
+		case "esc":
+			m.screen = listScreen
+			return m, nil
+		}
+	}
+	var cmd tea.Cmd
+	m.viewer, cmd = m.viewer.Update(msg)
+	return m, cmd
 }
 
 func (m Model) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -219,11 +252,6 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "ctrl+c", "esc":
-			if key.String() == "esc" && m.bodyEditing {
-				m.bodyEditing = false
-				m.editor.Blur()
-				return m, nil
-			}
 			if m.dirty {
 				m.confirmingExit = true
 				m.blurEditor()
@@ -241,7 +269,7 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.save
 		case "tab":
-			if m.bodyEditing {
+			if m.focus == 2 {
 				m.editor.InsertString(strings.Repeat(" ", m.indentSpaces))
 				m.dirty = m.isTainted()
 				return m, nil
@@ -249,17 +277,8 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.focusEditor((m.focus + 1) % 3)
 			return m, nil
 		case "shift+tab":
-			if m.bodyEditing {
-				break
-			}
 			m.focusEditor((m.focus + 2) % 3)
 			return m, nil
-		case "enter":
-			if m.focus == 2 && !m.bodyEditing {
-				m.bodyEditing = true
-				m.editor.Focus()
-				return m, nil
-			}
 		}
 	}
 	var cmds []tea.Cmd
@@ -270,9 +289,6 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case 1:
 		m.tags, cmd = m.tags.Update(msg)
 	case 2:
-		if !m.bodyEditing {
-			return m, nil
-		}
 		m.editor, cmd = m.editor.Update(msg)
 	}
 	cmds = append(cmds, cmd)
@@ -302,16 +318,45 @@ func (m *Model) beginEdit(note domain.Note) {
 	m.tags.SetValue(strings.Join(note.Tags, ", "))
 	m.editor.SetValue(note.Content)
 	m.focus = 2
-	m.bodyEditing = true
 	m.title.Blur()
 	m.tags.Blur()
 	m.editor.Focus()
 	m.savedTitle = note.Title
 	m.savedTags = strings.Join(note.Tags, ", ")
 	m.savedContent = note.Content
+	m.savedNote = note
 	m.resizeInputs()
 	m.dirty = false
 	m.status = ""
+}
+
+func (m *Model) beginView(note domain.Note) {
+	m.screen = viewScreen
+	m.viewNote = note
+	m.confirmingExit = false
+	m.viewer.SetContent(m.renderMarkdown(note.Content))
+	m.resizeViewer()
+	m.viewer.GotoTop()
+}
+
+func (m Model) renderMarkdown(content string) string {
+	width := m.contentWidth() - 4
+	if width < 20 {
+		width = 20
+	}
+	renderer, err := glamour.NewTermRenderer(
+		// Avoid Glamour's terminal background probe; it can block in an alternate-screen TUI.
+		glamour.WithStandardStyle("dark"),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return content
+	}
+	rendered, err := renderer.Render(content)
+	if err != nil {
+		return content
+	}
+	return strings.TrimSpace(rendered)
 }
 
 func (m Model) isTainted() bool {
@@ -325,6 +370,10 @@ func (m *Model) blurEditor() {
 }
 
 func (m *Model) leaveEditor() {
+	if m.editingID != "" {
+		m.beginView(m.savedNote)
+		return
+	}
 	m.screen = listScreen
 	m.blurEditor()
 	m.editingID = ""
@@ -341,9 +390,7 @@ func (m *Model) focusEditor(field int) {
 	case 1:
 		m.tags.Focus()
 	case 2:
-		if m.bodyEditing {
-			m.editor.Focus()
-		}
+		m.editor.Focus()
 	}
 }
 
@@ -360,11 +407,26 @@ func (m *Model) resizeInputs() {
 		height = 5
 	}
 	m.editor.SetHeight(height)
+	m.resizeViewer()
+}
+
+func (m *Model) resizeViewer() {
+	if m.viewer.Width < 1 {
+		return
+	}
+	m.viewer.Width = m.contentWidth() - 2
+	m.viewer.Height = m.contentHeight() - 2
+	if m.screen == viewScreen {
+		m.viewer.SetContent(m.renderMarkdown(m.viewNote.Content))
+	}
 }
 
 func (m Model) View() string {
 	if m.screen == editScreen {
 		return m.editorView()
+	}
+	if m.screen == viewScreen {
+		return m.viewView()
 	}
 	return m.listView()
 }
@@ -403,7 +465,7 @@ func (m Model) listView() string {
 		content = searchLine + "\n\n" + content
 	}
 	main := m.panel(content, m.contentHeight())
-	footerText := "n new   enter edit   / search   d delete   q quit"
+	footerText := "n new   enter view   e edit   / search   d delete   q quit"
 	if m.status != "" {
 		footerText = m.status + "   |   " + footerText
 	}
@@ -417,18 +479,9 @@ func (m Model) editorView() string {
 	}
 	header := m.topBar(m.title.Value(), state)
 	metadata := m.field("TITLE", m.title.View(), m.focus == 0) + "\n" + m.field("TAGS", m.tags.View(), m.focus == 1)
-	bodyLabel := "BODY"
-	if m.bodyEditing {
-		bodyLabel += "  [editing]"
-	} else if m.focus == 2 {
-		bodyLabel += "  [press Enter to edit]"
-	}
-	body := m.panel(m.field(bodyLabel, m.editor.View(), m.focus == 2), m.editorHeight(), m.focus == 2)
+	body := m.panel(m.field("BODY", m.editor.View(), m.focus == 2), m.editorHeight(), m.focus == 2)
 	content := metadata + "\n\n" + body
-	footerText := "tab next field   shift-tab previous   enter edit body   esc back"
-	if m.bodyEditing {
-		footerText = "ctrl-s save   tab indent   esc stop body editing"
-	}
+	footerText := "ctrl-s save   tab indent   shift-tab previous   esc view"
 	if m.status != "" {
 		footerText = m.status + "   |   " + footerText
 	}
@@ -436,6 +489,21 @@ func (m Model) editorView() string {
 		footerText = "UNSAVED CHANGES   [s] Save   [d] Discard   [c] Cancel"
 	}
 	return header + "\n" + content + "\n" + m.footBar(footerText)
+}
+
+func (m Model) viewView() string {
+	header := m.topBar(m.viewNote.Title, "SAVED")
+	metadata := m.field("TAGS", m.tagList(m.viewNote.Tags), false)
+	body := m.panel(m.viewer.View(), m.contentHeight(), false)
+	footer := m.footBar("e edit   up/down scroll   esc back   q quit")
+	return header + "\n" + metadata + "\n" + body + "\n" + footer
+}
+
+func (m Model) tagList(tags []string) string {
+	if len(tags) == 0 {
+		return m.muted("no tags")
+	}
+	return m.tag("#" + strings.Join(tags, " #"))
 }
 
 func (m Model) topBar(noteTitle, state string) string {

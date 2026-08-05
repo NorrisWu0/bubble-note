@@ -70,14 +70,12 @@ func openSavedNote() noteBehavior {
 }
 
 func (b *noteBehavior) editTitle() {
-	b.press(tea.KeyMsg{Type: tea.KeyEsc})
 	b.press(tea.KeyMsg{Type: tea.KeyShiftTab})
 	b.press(tea.KeyMsg{Type: tea.KeyShiftTab})
 	b.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" updated")})
 }
 
 func (b *noteBehavior) editTags() {
-	b.press(tea.KeyMsg{Type: tea.KeyEsc})
 	b.press(tea.KeyMsg{Type: tea.KeyShiftTab})
 	b.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(", urgent")})
 }
@@ -164,9 +162,6 @@ func TestUserIsWarnedBeforeLeavingAnEditedNote(t *testing.T) {
 			note := openSavedNote()
 			note.editBody()
 			note.press(exit.key)
-			if exit.name == "escape" {
-				note.press(tea.KeyMsg{Type: tea.KeyEsc})
-			}
 			note.expectUnsavedPrompt(t)
 		})
 	}
@@ -186,9 +181,30 @@ func TestUserCanTypeQWhileEditing(t *testing.T) {
 	}
 }
 
+func TestUserCanReadRenderedNoteBeforeEditing(t *testing.T) {
+	note := openSavedNote()
+	note.model.screen = listScreen
+	note.model.notes = []domain.Note{note.store.note}
+	note.press(tea.KeyMsg{Type: tea.KeyEnter})
+	if note.model.screen != viewScreen {
+		t.Fatal("opening a note should show rendered view mode")
+	}
+	view := note.model.View()
+	if !strings.Contains(view, "original") || !strings.Contains(view, "body") {
+		t.Fatalf("rendered view does not contain note body:\n%s", view)
+	}
+	note.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	if note.model.screen != editScreen {
+		t.Fatal("e should enter raw body editing mode")
+	}
+	note.press(tea.KeyMsg{Type: tea.KeyEsc})
+	if note.model.screen != viewScreen {
+		t.Fatal("esc should return to rendered view")
+	}
+}
+
 func TestUserCanMoveBackToThePreviousField(t *testing.T) {
 	note := openSavedNote()
-	note.press(tea.KeyMsg{Type: tea.KeyEsc})
 	note.press(tea.KeyMsg{Type: tea.KeyShiftTab})
 	note.press(tea.KeyMsg{Type: tea.KeyShiftTab})
 	note.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
@@ -212,10 +228,9 @@ func TestUserCanDiscardEditedChanges(t *testing.T) {
 	note := openSavedNote()
 	note.editBody()
 	note.press(tea.KeyMsg{Type: tea.KeyEsc})
-	note.press(tea.KeyMsg{Type: tea.KeyEsc})
 	note.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
-	if note.model.screen != listScreen {
-		t.Fatal("discarding should leave the editor")
+	if note.model.screen != viewScreen {
+		t.Fatal("discarding should return to the rendered note view")
 	}
 	if note.store.saveCount != 0 {
 		t.Fatal("discarding should not save a revision")
@@ -225,7 +240,6 @@ func TestUserCanDiscardEditedChanges(t *testing.T) {
 func TestUserCanCancelLeavingAnEditedNote(t *testing.T) {
 	note := openSavedNote()
 	note.editBody()
-	note.press(tea.KeyMsg{Type: tea.KeyEsc})
 	note.press(tea.KeyMsg{Type: tea.KeyEsc})
 	note.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
 	if note.model.screen != editScreen {
@@ -240,10 +254,9 @@ func TestUserCanSaveWhileLeavingAnEditedNote(t *testing.T) {
 	note := openSavedNote()
 	note.editBody()
 	note.press(tea.KeyMsg{Type: tea.KeyEsc})
-	note.press(tea.KeyMsg{Type: tea.KeyEsc})
 	note.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
-	if note.model.screen != listScreen {
-		t.Fatal("saving from the prompt should leave the editor")
+	if note.model.screen != viewScreen {
+		t.Fatal("saving from the prompt should return to the rendered note view")
 	}
 	if note.store.saveCount != 1 {
 		t.Fatalf("save count = %d, want 1", note.store.saveCount)
@@ -303,6 +316,7 @@ func TestEditorFrameShowsNoteStateAndKeyHints(t *testing.T) {
 		"[UNSAVED]",
 		"ctrl-s save",
 		"tab indent",
+		"shift-tab previous",
 	} {
 		if !strings.Contains(view, text) {
 			t.Fatalf("view does not contain %q:\n%s", text, view)
@@ -312,18 +326,6 @@ func TestEditorFrameShowsNoteStateAndKeyHints(t *testing.T) {
 		if lipgloss.Width(line) > 80 {
 			t.Fatalf("line is %d columns wide, want at most 80: %q", lipgloss.Width(line), line)
 		}
-	}
-}
-
-func TestEditorFrameShowsHowToEnterBodyEditing(t *testing.T) {
-	note := openSavedNote()
-	note.press(tea.KeyMsg{Type: tea.KeyEsc})
-	view := note.model.View()
-	if !strings.Contains(view, "BODY  [press Enter to edit]") {
-		t.Fatalf("view does not explain body editing:\n%s", view)
-	}
-	if !strings.Contains(view, "enter edit body") {
-		t.Fatalf("view does not show body edit keybinding:\n%s", view)
 	}
 }
 

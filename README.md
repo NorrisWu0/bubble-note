@@ -47,7 +47,8 @@ make build
 From the note list:
 
 - `n` creates a note.
-- `Enter` or `e` edits the selected note.
+- `Enter` opens the selected note in rendered view.
+- `e` edits the selected note as raw Markdown.
 - `/` starts search.
 - `j`/`k` or arrow keys navigate.
 - `d` deletes the selected note.
@@ -55,18 +56,23 @@ From the note list:
 
 While editing:
 
-- Notes open in Markdown body editing mode.
 - `Tab` inserts two spaces for indentation in the body.
-- `Esc` leaves body editing and enters field navigation mode.
-- In field navigation mode, `Tab` moves to the next field and `Shift-Tab` moves to the previous field.
+- `Tab` moves to the next field when the title or tags field is focused.
+- `Shift-Tab` moves to the previous field.
 - Title and tags can be edited directly when focused.
-- `Enter` on the body field starts body editing mode again.
 - `Ctrl-S` saves only when the title, tags, or body changed.
-- From field navigation mode, `Esc` or `Ctrl-C` starts the exit flow when changes are unsaved.
-- `Ctrl-C` starts the exit flow directly from body editing mode.
+- `Esc` returns to rendered view, or starts the exit flow when changes are unsaved.
+- `Ctrl-C` starts the exit flow when changes are unsaved.
 - Choose `s` to save, `d` to discard, or `c`/`Esc` to cancel.
 
 There is no autosave. Saving a changed note creates a new immutable revision and keeps the note open.
+
+While viewing a note:
+
+- Markdown is rendered for reading.
+- `e` enters raw Markdown editing.
+- `Up`/`Down` or `j`/`k` scroll the rendered note.
+- `Esc` returns to the note list.
 
 ## Status
 
