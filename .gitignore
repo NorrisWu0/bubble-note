@@ -1,0 +1,10 @@
+.bubble-note/
+*.db
+*.db-shm
+*.db-wal
+config.local.yaml
+
+/bin/
+bubble-note
+
+.DS_Store
