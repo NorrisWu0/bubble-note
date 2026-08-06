@@ -12,7 +12,16 @@ type Note struct {
 	CurrentRevID  string
 	Tags          []string
 	RevisionCount int
+	SyncStatus    SyncStatus
 }
+
+type SyncStatus string
+
+const (
+	SyncLocalOnly  SyncStatus = "local-only"
+	SyncSynced     SyncStatus = "synced"
+	SyncConflicted SyncStatus = "conflicted"
+)
 
 type Revision struct {
 	ID        string
@@ -20,6 +29,11 @@ type Revision struct {
 	Title     string
 	Content   string
 	CreatedAt time.Time
+}
+
+type SyncSnapshot struct {
+	Note      Note
+	Revisions []Revision
 }
 
 type Filter struct {

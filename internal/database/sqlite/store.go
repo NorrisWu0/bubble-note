@@ -50,6 +50,14 @@ func (s *Store) initialize() error {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+func (s *Store) SetRevisionRetention(retention int) error {
+	if retention < 14 {
+		return fmt.Errorf("revision retention must be at least 14")
+	}
+	s.revisionRetention = retention
+	return nil
+}
+
 func (s *Store) CreateNote(title, content string, tags []string) (notes.Note, error) {
 	return s.saveNewNote(title, content, tags)
 }
@@ -72,6 +80,9 @@ func (s *Store) saveNewNote(title, content string, tags []string) (notes.Note, e
 	if err := replaceTags(tx, noteID, tags); err != nil {
 		return notes.Note{}, err
 	}
+	if err := setSyncStatusTx(tx, noteID, notes.SyncLocalOnly, ""); err != nil {
+		return notes.Note{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return notes.Note{}, err
 	}
@@ -80,12 +91,13 @@ func (s *Store) saveNewNote(title, content string, tags []string) (notes.Note, e
 
 func (s *Store) GetNote(id string) (notes.Note, error) {
 	row := s.db.QueryRow(`SELECT n.id, n.title, r.content, n.created_at, n.updated_at, n.current_revision_id,
-		(SELECT COUNT(*) FROM revisions WHERE note_id = n.id)
+		(SELECT COUNT(*) FROM revisions WHERE note_id = n.id), COALESCE(ns.status, ?)
 		FROM notes n JOIN revisions r ON r.id = n.current_revision_id
-		WHERE n.id = ? AND n.deleted_at IS NULL`, id)
+		LEFT JOIN note_sync ns ON ns.note_id = n.id
+		WHERE n.id = ? AND n.deleted_at IS NULL`, notes.SyncLocalOnly, id)
 	var note notes.Note
 	var created, updated string
-	if err := row.Scan(&note.ID, &note.Title, &note.Content, &created, &updated, &note.CurrentRevID, &note.RevisionCount); err != nil {
+	if err := row.Scan(&note.ID, &note.Title, &note.Content, &created, &updated, &note.CurrentRevID, &note.RevisionCount, &note.SyncStatus); err != nil {
 		return notes.Note{}, err
 	}
 	var err error
@@ -106,10 +118,12 @@ func (s *Store) GetNote(id string) (notes.Note, error) {
 
 func (s *Store) ListNotes(filter notes.Filter) ([]notes.Note, error) {
 	query := `SELECT n.id, n.title, r.content, n.created_at, n.updated_at, n.current_revision_id,
-		(SELECT COUNT(*) FROM revisions WHERE note_id = n.id)
+		(SELECT COUNT(*) FROM revisions WHERE note_id = n.id), COALESCE(ns.status, ?)
 		FROM notes n JOIN revisions r ON r.id = n.current_revision_id
+		LEFT JOIN note_sync ns ON ns.note_id = n.id
 		WHERE n.deleted_at IS NULL`
-	args := make([]interface{}, 0, 4)
+	args := make([]interface{}, 0, 5)
+	args = append(args, notes.SyncLocalOnly)
 	if filter.Query != "" {
 		query += ` AND n.id IN (SELECT note_id FROM revision_search WHERE revision_search MATCH ?)`
 		args = append(args, searchQuery(filter.Query))
@@ -136,7 +150,7 @@ func (s *Store) ListNotes(filter notes.Filter) ([]notes.Note, error) {
 	for rows.Next() {
 		var note notes.Note
 		var created, updated string
-		if err := rows.Scan(&note.ID, &note.Title, &note.Content, &created, &updated, &note.CurrentRevID, &note.RevisionCount); err != nil {
+		if err := rows.Scan(&note.ID, &note.Title, &note.Content, &created, &updated, &note.CurrentRevID, &note.RevisionCount, &note.SyncStatus); err != nil {
 			return nil, err
 		}
 		note.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
@@ -183,6 +197,9 @@ func (s *Store) SaveNote(id, title, content string, tags []string) (notes.Note, 
 	if err := replaceTags(tx, id, tags); err != nil {
 		return notes.Note{}, err
 	}
+	if err := setSyncStatusTx(tx, id, notes.SyncLocalOnly, ""); err != nil {
+		return notes.Note{}, err
+	}
 	if err := pruneRevisions(tx, id, s.revisionRetention); err != nil {
 		return notes.Note{}, err
 	}
@@ -205,6 +222,82 @@ func (s *Store) DeleteNote(id string) error {
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+func (s *Store) DeleteNoteAtomic(id string, deleteRemote func() error) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE notes SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL`, time.Now().UTC().Format(time.RFC3339Nano), id)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return sql.ErrNoRows
+	}
+	if deleteRemote != nil {
+		if err := deleteRemote(); err != nil {
+			return fmt.Errorf("delete remote note: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) SetSyncStatus(noteID string, status notes.SyncStatus, etag string) error {
+	_, err := s.db.Exec(`INSERT INTO note_sync (note_id, status, remote_etag) VALUES (?, ?, ?)
+		ON CONFLICT(note_id) DO UPDATE SET status = excluded.status, remote_etag = excluded.remote_etag`, noteID, status, etag)
+	return err
+}
+
+func (s *Store) SyncETag(noteID string) (string, error) {
+	var etag string
+	err := s.db.QueryRow(`SELECT remote_etag FROM note_sync WHERE note_id = ?`, noteID).Scan(&etag)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return etag, err
+}
+
+func (s *Store) ApplyRemoteSnapshot(noteID string, snapshot notes.SyncSnapshot) (notes.Note, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return notes.Note{}, err
+	}
+	defer tx.Rollback()
+	for _, revision := range snapshot.Revisions {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO revisions (id, note_id, title, content, created_at) VALUES (?, ?, ?, ?, ?)`, revision.ID, noteID, revision.Title, revision.Content, revision.CreatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+			return notes.Note{}, err
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO revision_search (revision_id, note_id, title, content) VALUES (?, ?, ?, ?)`, revision.ID, noteID, revision.Title, revision.Content); err != nil {
+			return notes.Note{}, err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE notes SET title = ?, current_revision_id = ?, updated_at = ? WHERE id = ?`, snapshot.Note.Title, snapshot.Note.CurrentRevID, snapshot.Note.UpdatedAt.UTC().Format(time.RFC3339Nano), noteID); err != nil {
+		return notes.Note{}, err
+	}
+	if err := replaceTags(tx, noteID, snapshot.Note.Tags); err != nil {
+		return notes.Note{}, err
+	}
+	if err := pruneRevisions(tx, noteID, s.revisionRetention); err != nil {
+		return notes.Note{}, err
+	}
+	if err := setSyncStatusTx(tx, noteID, notes.SyncSynced, ""); err != nil {
+		return notes.Note{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return notes.Note{}, err
+	}
+	return s.GetNote(noteID)
+}
+
+func (s *Store) CopyRemoteSnapshot(snapshot notes.SyncSnapshot) (notes.Note, error) {
+	return s.CreateNote("Copy of "+snapshot.Note.Title, snapshot.Note.Content, snapshot.Note.Tags)
 }
 
 func (s *Store) ListRevisions(noteID string) ([]notes.Revision, error) {
@@ -292,6 +385,12 @@ func pruneRevisions(tx *sql.Tx, noteID string, keep int) error {
 	_, err = tx.Exec(`DELETE FROM revisions WHERE note_id = ? AND id NOT IN (
 		SELECT id FROM revisions WHERE note_id = ? ORDER BY created_at DESC LIMIT ?
 	)`, noteID, noteID, keep)
+	return err
+}
+
+func setSyncStatusTx(tx *sql.Tx, noteID string, status notes.SyncStatus, etag string) error {
+	_, err := tx.Exec(`INSERT INTO note_sync (note_id, status, remote_etag) VALUES (?, ?, ?)
+		ON CONFLICT(note_id) DO UPDATE SET status = excluded.status, remote_etag = excluded.remote_etag`, noteID, status, etag)
 	return err
 }
 

@@ -9,21 +9,23 @@ import (
 )
 
 type NoteRow struct {
-	Title    string
-	Updated  string
-	Excerpt  string
-	Tags     []string
-	Selected bool
+	Title      string
+	Updated    string
+	Excerpt    string
+	Tags       []string
+	SyncStatus string
+	Selected   bool
 }
 
 type ListModel struct {
-	Width       int
-	Height      int
-	Count       int
-	Search      string
-	SearchInput string
-	Rows        []NoteRow
-	Status      string
+	Width           int
+	Height          int
+	Count           int
+	Search          string
+	SearchInput     string
+	Rows            []NoteRow
+	Status          string
+	SettingsFocused bool
 }
 
 type EditorModel struct {
@@ -37,16 +39,18 @@ type EditorModel struct {
 	TagsActive     bool
 	BodyActive     bool
 	State          string
+	SyncStatus     string
 	Status         string
 	ConfirmingExit bool
 }
 
 type ReaderModel struct {
-	Width  int
-	Height int
-	Title  string
-	Tags   []string
-	Body   string
+	Width      int
+	Height     int
+	Title      string
+	Tags       []string
+	Body       string
+	SyncStatus string
 }
 
 func RenderList(model ListModel, palette theme.Palette) string {
@@ -66,7 +70,7 @@ func RenderList(model ListModel, palette theme.Palette) string {
 		if row.Selected {
 			marker = ">>"
 		}
-		line := fmt.Sprintf("%s %-28s %s", marker, truncate(row.Title, 28), row.Updated)
+		line := fmt.Sprintf("%s %-28s %s %s", marker, truncate(row.Title, 28), row.Updated, syncStatus(row.SyncStatus, palette))
 		if row.Selected {
 			line = selected(line, palette)
 		}
@@ -78,19 +82,45 @@ func RenderList(model ListModel, palette theme.Palette) string {
 			}
 		}
 	}
-	content := body.String()
-	if searchLine != "" {
-		content = searchLine + "\n\n" + content
+	if body.Len() > 0 {
+		body.WriteString("\n")
 	}
-	footer := "n new   enter view   e edit   / search   d delete   q quit"
+	settingsLine := "   Settings"
+	if model.SettingsFocused {
+		settingsLine = selected(">> Settings", palette)
+	}
+	noteContent := body.String()
+	if searchLine != "" {
+		noteContent = searchLine + "\n\n" + noteContent
+	}
+	panelHeight := contentHeight(model.Height)
+	systemHeight := 3
+	noteHeight := panelHeight - systemHeight - 1
+	if noteHeight < 3 {
+		noteHeight = 3
+	}
+	notePanel := panel(noteContent, noteHeight, !model.SettingsFocused, model.Width, palette)
+	systemPanel := panel(settingsLine, systemHeight, model.SettingsFocused, model.Width, palette)
+	footer := "n new   enter view   e edit   tab settings   / search   d delete   q quit"
 	if model.Status != "" {
 		footer = model.Status + "   |   " + footer
 	}
-	return header + "\n" + panel(content, contentHeight(model.Height), false, model.Width, palette) + "\n" + footBar(footer, model.Width, palette)
+	return header + "\n" + notePanel + "\n" + systemPanel + "\n" + footBar(footer, model.Width, palette)
+}
+
+func syncStatus(status string, palette theme.Palette) string {
+	switch status {
+	case "synced":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Secondary)).Render("✓")
+	case "conflicted":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Danger)).Render("⚠")
+	default:
+		return muted("local", palette)
+	}
 }
 
 func RenderEditor(model EditorModel, palette theme.Palette) string {
-	header := topBar(model.Width, model.Title, model.State, palette)
+	header := topBar(model.Width, model.Title, noteState(model.State, model.SyncStatus), palette)
 	metadata := field("TITLE", model.TitleView, model.TitleActive, palette) + "\n" + field("TAGS", model.TagsView, model.TagsActive, palette)
 	body := panel(field("BODY", model.BodyView, model.BodyActive, palette), editorHeight(model.Height), model.BodyActive, model.Width, palette)
 	footer := "ctrl-s save   tab indent   shift-tab previous   esc view"
@@ -104,10 +134,17 @@ func RenderEditor(model EditorModel, palette theme.Palette) string {
 }
 
 func RenderReader(model ReaderModel, palette theme.Palette) string {
-	header := topBar(model.Width, model.Title, "SAVED", palette)
+	header := topBar(model.Width, model.Title, noteState("SAVED", model.SyncStatus), palette)
 	metadata := field("TAGS", tagList(model.Tags, palette), false, palette)
 	body := panel(model.Body, contentHeight(model.Height), false, model.Width, palette)
 	return header + "\n" + metadata + "\n" + body + "\n" + footBar("e edit   up/down scroll   esc back   q quit", model.Width, palette)
+}
+
+func noteState(state, syncStatus string) string {
+	if syncStatus == "" {
+		return state
+	}
+	return state + " / " + syncStatus
 }
 
 func topBar(width int, noteTitle, state string, palette theme.Palette) string {

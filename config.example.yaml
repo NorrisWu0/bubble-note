@@ -6,3 +6,14 @@ theme:
   flavor: mocha
   overrides:
     primary: "#F5A97F"
+
+storage:
+  region: "us-east-1"
+  bucket: ""
+  access_key_id: ""
+  secret_access_key: ""
+  # Advanced S3-compatible options:
+  endpoint: ""
+  prefix: ""
+  path_style: false
+  session_token: ""

@@ -32,3 +32,13 @@ func TestRenderReaderShowsRenderedBody(t *testing.T) {
 		t.Fatalf("reader output does not contain body:\n%s", output)
 	}
 }
+
+func TestRenderListPlacesSettingsInsideListPanel(t *testing.T) {
+	output := RenderList(ListModel{Width: 80, Height: 24, SettingsFocused: true}, theme.Default())
+	if !strings.Contains(output, ">> Settings") {
+		t.Fatalf("settings row is missing from list panel:\n%s", output)
+	}
+	if strings.Contains(output, "[>> Settings <<]") {
+		t.Fatal("settings should not be rendered as a footer button")
+	}
+}

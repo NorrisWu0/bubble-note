@@ -8,13 +8,16 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/norriswu0/bubble-note/internal/config"
 	"github.com/norriswu0/bubble-note/internal/notes"
+	"github.com/norriswu0/bubble-note/internal/theme"
 )
 
 type behaviorStore struct {
 	note        notes.Note
 	saveCount   int
 	createCount int
+	deleteCount int
 	failSave    bool
 }
 
@@ -42,7 +45,10 @@ func (s *behaviorStore) SaveNote(id, title, content string, tags []string) (note
 	return s.note, nil
 }
 
-func (s *behaviorStore) DeleteNote(string) error { return nil }
+func (s *behaviorStore) DeleteNote(string) error {
+	s.deleteCount++
+	return nil
+}
 
 func (s *behaviorStore) ListRevisions(string) ([]notes.Revision, error) { return nil, nil }
 
@@ -247,6 +253,139 @@ func TestUserCanCancelLeavingAnEditedNote(t *testing.T) {
 	}
 	if !note.model.dirty {
 		t.Fatal("cancelling should keep changes unsaved")
+	}
+}
+
+func TestUserEntersSettingsWithTabAndEnter(t *testing.T) {
+	store := &behaviorStore{}
+	model := NewWithConfig(store, theme.Default(), config.Default(), t.TempDir()+"/config.yaml", nil, nil)
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	if !model.settingsFocused {
+		t.Fatal("tab should focus the settings button")
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	if model.settingsFocused {
+		t.Fatal("tab should return focus to the note list")
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if model.screen != settingsScreen {
+		t.Fatal("enter should open settings")
+	}
+}
+
+func TestUserMustConfirmNoteDeletion(t *testing.T) {
+	store := &behaviorStore{note: notes.Note{ID: "note-1", Title: "keep me"}}
+	model := New(store)
+	model.notes = []notes.Note{store.note}
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	model = updated.(Model)
+	if !model.confirmingDelete {
+		t.Fatal("delete should require confirmation")
+	}
+	if store.deleteCount != 0 {
+		t.Fatal("delete should not happen before confirmation")
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	model = updated.(Model)
+	if model.confirmingDelete || store.deleteCount != 0 {
+		t.Fatal("cancel should preserve the note")
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	model = updated.(Model)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	model = updated.(Model)
+	if cmd != nil {
+		msg := cmd()
+		updated, _ = model.Update(msg)
+		model = updated.(Model)
+	}
+	if store.deleteCount != 1 {
+		t.Fatal("confirmed delete should delete the note once")
+	}
+}
+
+func TestSettingsRowsDeclareTheirSections(t *testing.T) {
+	model := NewWithConfig(&behaviorStore{}, theme.Default(), config.Default(), t.TempDir()+"/config.yaml", nil, nil)
+	rows := model.settingRows()
+	for _, row := range rows {
+		if row.Label == "Region" || row.Label == "Bucket" || row.Label == "Access key ID" || row.Label == "Secret access key" {
+			if row.Section != "STORAGE" {
+				t.Fatalf("%s section = %q, want STORAGE", row.Label, row.Section)
+			}
+		}
+	}
+}
+
+func TestThemeSettingSelectsSupportedCatppuccinFlavor(t *testing.T) {
+	cfg := config.Default()
+	model := NewWithConfig(&behaviorStore{}, theme.Default(), cfg, t.TempDir()+"/config.yaml", nil, nil)
+	model.beginSettings()
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if model.settings.Theme.Flavor != "latte" {
+		t.Fatalf("theme flavor = %q, want latte", model.settings.Theme.Flavor)
+	}
+	want, _ := theme.Resolve(config.ThemeConfig{Preset: "catppuccin", Flavor: "latte"})
+	if model.palette.Background != want.Background {
+		t.Fatalf("palette background = %q, want %q", model.palette.Background, want.Background)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	model = updated.(Model)
+	if model.settings.Theme.Flavor != "frappe" {
+		t.Fatalf("theme flavor = %q, want frappe", model.settings.Theme.Flavor)
+	}
+}
+
+func TestSavingThemeReloadsRunningPalette(t *testing.T) {
+	cfg := config.Default()
+	model := NewWithConfig(&behaviorStore{}, theme.Default(), cfg, t.TempDir()+"/config.yaml", nil, nil)
+	model.beginSettings()
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("ctrl-s should save settings")
+	}
+	msg := cmd()
+	updated, _ = model.Update(msg)
+	model = updated.(Model)
+	want, _ := theme.Resolve(config.ThemeConfig{Preset: "catppuccin", Flavor: "latte"})
+	if model.palette.Background != want.Background {
+		t.Fatalf("palette background = %q, want %q", model.palette.Background, want.Background)
+	}
+}
+
+func TestUserMustConfirmClearingS3Configuration(t *testing.T) {
+	cfg := config.Default()
+	cfg.Storage = config.StorageConfig{Region: "us-east-1", Bucket: "notes", AccessKeyID: "access", SecretAccessKey: "secret"}
+	model := NewWithConfig(&behaviorStore{}, theme.Default(), cfg, t.TempDir()+"/config.yaml", nil, nil)
+	model.beginSettings()
+	model.settingsFocus = settingClear
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if !model.confirmingClear {
+		t.Fatalf("clear should require confirmation (focus=%d)", model.settingsFocus)
+	}
+	if model.settings.Storage.Bucket == "" {
+		t.Fatal("confirmation should not clear settings")
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if model.settings.Storage.Bucket == "" {
+		t.Fatal("cancelling clear should preserve settings")
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	model = updated.(Model)
+	if model.settings.Storage.Bucket != "" || model.settings.Storage.AccessKeyID != "" {
+		t.Fatal("confirmed clear should remove S3 settings")
 	}
 }
 

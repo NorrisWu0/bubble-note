@@ -27,6 +27,12 @@ CREATE TABLE IF NOT EXISTS note_tags (
     PRIMARY KEY (note_id, tag_name)
 );
 
+CREATE TABLE IF NOT EXISTS note_sync (
+    note_id TEXT PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'local-only',
+    remote_etag TEXT NOT NULL DEFAULT ''
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS revision_search USING fts5(
     revision_id UNINDEXED,
     note_id UNINDEXED,

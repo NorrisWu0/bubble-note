@@ -14,19 +14,22 @@ func TestLoadDefaultsWhenConfigIsMissing(t *testing.T) {
 	if cfg.RevisionRetention != DefaultRevisionRetention {
 		t.Fatalf("retention = %d, want %d", cfg.RevisionRetention, DefaultRevisionRetention)
 	}
+	if cfg.Storage.Prefix != "" || cfg.Storage.PathStyle {
+		t.Fatalf("storage defaults = %+v, want empty prefix and virtual-hosted addressing", cfg.Storage)
+	}
 }
 
 func TestLoadConfiguredRetention(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("revision_retention: 3\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("revision_retention: 14\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.RevisionRetention != 3 {
-		t.Fatalf("retention = %d, want 3", cfg.RevisionRetention)
+	if cfg.RevisionRetention != 14 {
+		t.Fatalf("retention = %d, want 14", cfg.RevisionRetention)
 	}
 }
 
@@ -37,6 +40,16 @@ func TestLoadRejectsInvalidRetention(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected invalid retention error")
+	}
+}
+
+func TestLoadRejectsRetentionBelowMinimum(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("revision_retention: 13\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected retention minimum error")
 	}
 }
 
@@ -61,6 +74,31 @@ func TestLoadIndentationSetting(t *testing.T) {
 	}
 	if cfg.IndentSpaces != 4 {
 		t.Fatalf("indent spaces = %d, want 4", cfg.IndentSpaces)
+	}
+}
+
+func TestLoadAllowsIncompleteStorageForSettingsEditing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("storage:\n  bucket: bubble-note\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatal("incomplete storage should remain editable: ", err)
+	}
+}
+
+func TestLoadMigratesLegacySyncNamespace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := "sync:\n  region: ap-southeast-2\n  bucket: bubble-note\n  access_key_id: access\n  secret_access_key: secret\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Storage.Bucket != "bubble-note" || cfg.Storage.Region != "ap-southeast-2" {
+		t.Fatalf("storage = %+v, want migrated legacy values", cfg.Storage)
 	}
 }
 

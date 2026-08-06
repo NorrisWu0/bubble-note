@@ -14,7 +14,7 @@
 - Work entirely offline.
 - Use Catppuccin color themes with configurable semantic color overrides.
 
-Remote S3-compatible storage is planned as an optional layer. It is not required for local use.
+S3-compatible storage is an optional connection layer. It is not required for local use, and note synchronization is not implemented yet.
 
 ## Install
 
@@ -52,6 +52,7 @@ From the note list:
 - `/` starts search.
 - `j`/`k` or arrow keys navigate.
 - `d` deletes the selected note.
+- `Tab`, then `Enter` opens the Settings screen.
 - `q` quits the application.
 
 While editing:
@@ -76,7 +77,7 @@ While viewing a note:
 
 ## Status
 
-The first version stores notes in SQLite. Notes use immutable revisions, with a configurable retention limit (14 by default). S3 support is intentionally reserved behind a future remote-store boundary and is not required to use the app.
+The application stores notes in SQLite. Notes use immutable revisions, with a configurable retention limit (14 by default). S3 synchronization is not implemented yet and is not required to use the app.
 
 ## Search Filters
 
@@ -90,7 +91,7 @@ Content terms can be combined with these filters.
 
 ## Data And Configuration
 
-The application creates its database and configuration under the platform's user config directory. On Linux, the configuration file is `~/.config/bubble-note/config.yaml`. It is created with defaults on first launch and existing configuration is never overwritten. Edit this file directly to update bubble-note's settings, then restart the application.
+The application creates its database and configuration under the platform's user config directory. On Linux, the configuration file is `~/.config/bubble-note/config.yaml`. It is created with defaults on first launch and existing configuration is never overwritten. Use the Settings screen to change configuration, then press `Ctrl-S` to save it.
 
 Configure revision retention with:
 
@@ -99,6 +100,27 @@ revision_retention: 14
 ```
 
 The default is to keep the latest 14 revisions per note.
+
+Optional S3-compatible storage can be configured for a later synchronization workflow. The current implementation only establishes the connection layer; it does not upload or download notes yet. Storage is considered enabled only after a connectivity check succeeds.
+
+The Settings screen supports Catppuccin theme selection (`latte`, `frappe`, `macchiato`, or `mocha`), revision limits, all S3 settings, masked credentials, asynchronous connection refresh, and confirmed S3 configuration clearing. Revision limits must be at least 14 and affect only future note versions.
+
+When storage is connected, a successful note save starts an asynchronous per-note sync. The local save always completes first; if S3 is unavailable, the note remains available locally and shows `local-only`. Remote notes use a manifest plus retained revision objects and follow the configured revision limit. A manifest ETag protects against overwriting a remote change, which marks the note `conflicted` for note-view resolution.
+
+```yaml
+storage:
+  region: "us-east-1"
+  bucket: "your-bucket"
+  access_key_id: "your-access-key"
+  secret_access_key: "your-secret-key"
+  # Optional advanced settings:
+  endpoint: "" # Leave empty for AWS S3; use a provider endpoint for Spaces.
+  prefix: ""
+  path_style: false
+  session_token: "" # Optional temporary credential token.
+```
+
+Credentials are stored in the user-owned `config.yaml` file, which bubble-note creates with restrictive permissions. DigitalOcean Spaces typically uses an endpoint such as `https://nyc3.digitaloceanspaces.com` and region `nyc3`.
 
 Configure body indentation width with `indent_spaces`:
 
