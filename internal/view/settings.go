@@ -59,7 +59,7 @@ func RenderSettings(model SettingsModel, palette theme.Palette) string {
 		}
 		body.WriteString(line + "\n")
 	}
-	footer := "up/down navigate   enter edit/select   ctrl-s save   esc back"
+	footer := "enter cycle   ctrl-s save   esc back"
 	if model.Status != "" {
 		footer = model.Status + "   |   " + footer
 	}

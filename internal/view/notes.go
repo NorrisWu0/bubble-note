@@ -9,48 +9,41 @@ import (
 )
 
 type NoteRow struct {
-	Title      string
-	Updated    string
-	Excerpt    string
-	Tags       []string
-	SyncStatus string
-	Selected   bool
+	Title    string
+	Updated  string
+	Excerpt  string
+	Tags     []string
+	Selected bool
 }
 
 type ListModel struct {
-	Width           int
-	Height          int
-	Count           int
-	Search          string
-	SearchInput     string
-	Rows            []NoteRow
-	Status          string
-	SettingsFocused bool
-}
-
-type EditorModel struct {
-	Width          int
-	Height         int
-	Title          string
-	TitleView      string
-	TagsView       string
-	BodyView       string
-	TitleActive    bool
-	TagsActive     bool
-	BodyActive     bool
-	State          string
-	SyncStatus     string
-	Status         string
-	ConfirmingExit bool
+	Width       int
+	Height      int
+	Count       int
+	Search      string
+	SearchInput string
+	Rows        []NoteRow
+	Status      string
+	GitStatus   string
 }
 
 type ReaderModel struct {
-	Width      int
-	Height     int
-	Title      string
-	Tags       []string
-	Body       string
-	SyncStatus string
+	Width  int
+	Height int
+	Title  string
+	Tags   []string
+	Body   string
+}
+
+type FormModel struct {
+	Width       int
+	Height      int
+	Heading     string
+	TitleView   string
+	TagsView    string
+	TitleActive bool
+	TagsActive  bool
+	Status      string
 }
 
 func RenderList(model ListModel, palette theme.Palette) string {
@@ -70,7 +63,7 @@ func RenderList(model ListModel, palette theme.Palette) string {
 		if row.Selected {
 			marker = ">>"
 		}
-		line := fmt.Sprintf("%s %-28s %s %s", marker, truncate(row.Title, 28), row.Updated, syncStatus(row.SyncStatus, palette))
+		line := fmt.Sprintf("%s %-28s %s", marker, truncate(row.Title, 28), row.Updated)
 		if row.Selected {
 			line = selected(line, palette)
 		}
@@ -85,66 +78,38 @@ func RenderList(model ListModel, palette theme.Palette) string {
 	if body.Len() > 0 {
 		body.WriteString("\n")
 	}
-	settingsLine := "   Settings"
-	if model.SettingsFocused {
-		settingsLine = selected(">> Settings", palette)
-	}
 	noteContent := body.String()
 	if searchLine != "" {
 		noteContent = searchLine + "\n\n" + noteContent
 	}
 	panelHeight := contentHeight(model.Height)
-	systemHeight := 3
-	noteHeight := panelHeight - systemHeight - 1
-	if noteHeight < 3 {
-		noteHeight = 3
+	notePanel := panel(noteContent, panelHeight-1, true, model.Width, palette)
+	footer := "n new   enter view   e edit   t tags   / search   d delete   r refresh   g git   s settings   q quit"
+	if model.GitStatus != "" {
+		footer = model.GitStatus + "   |   " + footer
 	}
-	notePanel := panel(noteContent, noteHeight, !model.SettingsFocused, model.Width, palette)
-	systemPanel := panel(settingsLine, systemHeight, model.SettingsFocused, model.Width, palette)
-	footer := "n new   enter view   e edit   tab settings   / search   d delete   q quit"
 	if model.Status != "" {
 		footer = model.Status + "   |   " + footer
 	}
-	return header + "\n" + notePanel + "\n" + systemPanel + "\n" + footBar(footer, model.Width, palette)
+	return header + "\n" + notePanel + "\n" + footBar(footer, model.Width, palette)
 }
 
-func syncStatus(status string, palette theme.Palette) string {
-	switch status {
-	case "synced":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Secondary)).Render("✓")
-	case "conflicted":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Danger)).Render("⚠")
-	default:
-		return muted("local", palette)
-	}
-}
-
-func RenderEditor(model EditorModel, palette theme.Palette) string {
-	header := topBar(model.Width, model.Title, noteState(model.State, model.SyncStatus), palette)
+func RenderForm(model FormModel, palette theme.Palette) string {
+	header := topBar(model.Width, "", model.Heading, palette)
 	metadata := field("TITLE", model.TitleView, model.TitleActive, palette) + "\n" + field("TAGS", model.TagsView, model.TagsActive, palette)
-	body := panel(field("BODY", model.BodyView, model.BodyActive, palette), editorHeight(model.Height), model.BodyActive, model.Width, palette)
-	footer := "ctrl-s save   tab indent   shift-tab previous   esc view"
+	body := panel(metadata, formHeight(model.Height), model.TitleActive || model.TagsActive, model.Width, palette)
+	footer := "enter save   tab next   shift-tab previous   esc cancel"
 	if model.Status != "" {
 		footer = model.Status + "   |   " + footer
 	}
-	if model.ConfirmingExit {
-		footer = "UNSAVED CHANGES   [s] Save   [d] Discard   [c] Cancel"
-	}
-	return header + "\n" + metadata + "\n\n" + body + "\n" + footBar(footer, model.Width, palette)
+	return header + "\n" + body + "\n" + footBar(footer, model.Width, palette)
 }
 
 func RenderReader(model ReaderModel, palette theme.Palette) string {
-	header := topBar(model.Width, model.Title, noteState("SAVED", model.SyncStatus), palette)
+	header := topBar(model.Width, model.Title, "VIEW", palette)
 	metadata := field("TAGS", tagList(model.Tags, palette), false, palette)
 	body := panel(model.Body, contentHeight(model.Height), false, model.Width, palette)
-	return header + "\n" + metadata + "\n" + body + "\n" + footBar("e edit   up/down scroll   esc back   q quit", model.Width, palette)
-}
-
-func noteState(state, syncStatus string) string {
-	if syncStatus == "" {
-		return state
-	}
-	return state + " / " + syncStatus
+	return header + "\n" + metadata + "\n" + body + "\n" + footBar("e edit   t tags   d delete   up/down scroll   esc back   q quit", model.Width, palette)
 }
 
 func topBar(width int, noteTitle, state string, palette theme.Palette) string {
@@ -163,9 +128,6 @@ func topBar(width int, noteTitle, state string, palette theme.Palette) string {
 	}
 	line := left + strings.Repeat(" ", gap) + right
 	style := lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color(palette.Text)).Background(lipgloss.Color(palette.Surface)).Bold(true)
-	if state == "UNSAVED" {
-		style = style.Foreground(lipgloss.Color(palette.Primary))
-	}
 	return style.Render(line)
 }
 
@@ -173,9 +135,6 @@ func footBar(text string, width int, palette theme.Palette) string {
 	width = viewWidth(width)
 	text = truncate(text, width-1)
 	style := lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color(palette.Muted)).BorderTop(true).BorderForeground(lipgloss.Color(palette.Border))
-	if strings.HasPrefix(text, "UNSAVED") {
-		style = style.Foreground(lipgloss.Color(palette.Primary)).Bold(true)
-	}
 	return style.Render(" " + text)
 }
 
@@ -243,11 +202,11 @@ func contentHeight(height int) int {
 	return height - 5
 }
 
-func editorHeight(height int) int {
+func formHeight(height int) int {
 	if height <= 0 {
 		return 5
 	}
-	value := height - 10
+	value := height - 6
 	if value < 5 {
 		return 5
 	}

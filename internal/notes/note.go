@@ -43,12 +43,16 @@ type Filter struct {
 	Through *time.Time
 }
 
+// FileNote pairs a note with the directory that holds it on disk.
+type FileNote struct {
+	Note
+	Dir string
+}
+
 type Repository interface {
 	CreateNote(title, content string, tags []string) (Note, error)
 	GetNote(id string) (Note, error)
 	ListNotes(filter Filter) ([]Note, error)
 	SaveNote(id, title, content string, tags []string) (Note, error)
 	DeleteNote(id string) error
-	ListRevisions(noteID string) ([]Revision, error)
-	RestoreRevision(noteID, revisionID string) (Note, error)
 }

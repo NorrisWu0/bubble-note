@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -14,6 +15,9 @@ const DefaultIndentSpaces = 2
 const MinimumRevisionRetention = 14
 
 type Config struct {
+	NotesDir          string        `yaml:"notes_dir"`
+	Editor            string        `yaml:"editor"`
+	GitClient         string        `yaml:"git_client"`
 	RevisionRetention int           `yaml:"revision_retention"`
 	IndentSpaces      int           `yaml:"indent_spaces"`
 	Theme             ThemeConfig   `yaml:"theme"`
@@ -50,6 +54,7 @@ type legacySyncConfig struct {
 
 func Default() Config {
 	return Config{
+		GitClient:         "lazygit",
 		RevisionRetention: DefaultRevisionRetention,
 		IndentSpaces:      DefaultIndentSpaces,
 		Theme: ThemeConfig{
@@ -60,6 +65,39 @@ func Default() Config {
 			Region: "us-east-1",
 		},
 	}
+}
+
+// EditorCommand returns the editor command to launch, honouring the config value,
+// then the EDITOR environment variable, then nvim.
+func (c Config) EditorCommand() string {
+	if strings.TrimSpace(c.Editor) != "" {
+		return c.Editor
+	}
+	if editor := os.Getenv("EDITOR"); strings.TrimSpace(editor) != "" {
+		return editor
+	}
+	return "nvim"
+}
+
+// GitClientCommand returns the git TUI client to launch, defaulting to lazygit.
+func (c Config) GitClientCommand() string {
+	if strings.TrimSpace(c.GitClient) != "" {
+		return c.GitClient
+	}
+	return "lazygit"
+}
+
+// NotesDirectory resolves the notes directory, defaulting to the app directory
+// under the user config dir.
+func (c Config) NotesDirectory() (string, error) {
+	if strings.TrimSpace(c.NotesDir) != "" {
+		return c.NotesDir, nil
+	}
+	dir, err := UserPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "notes"), nil
 }
 
 func Load(path string) (Config, error) {
