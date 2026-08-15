@@ -8,8 +8,15 @@ import (
 )
 
 func main() {
-	if err := cli.Run(); err != nil {
+	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "bubble-note:", err)
 		os.Exit(1)
 	}
+}
+
+func run() error {
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		return cli.RunMigrate(os.Args[2:])
+	}
+	return cli.Run()
 }
