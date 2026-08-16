@@ -6,7 +6,7 @@ control them with git.
 
 ## Features
 
-- Notes are plain files: `<notes_dir>/<title>/README.md` (body) and `manifest.json` (metadata).
+- Notes are plain files: `<notes_dir>/.../<title>/README.md` (body) and `manifest.json` (metadata).
 - Edit note content in your editor (nvim), launched from bubble-note.
 - Edit titles and tags in a small built-in form.
 - Full-text search (SQLite FTS5 index, rebuilt from files).
@@ -26,10 +26,11 @@ Run with `bubble-note`.
 
 From the note list:
 
-- `n` creates a note (title/tags form, then opens your editor).
+- `a` creates a note — a popup asks for a path (optional folders), title, and tags; your editor opens, and on exit you land in the rendered view.
 - `Enter` opens the selected note in rendered view.
 - `e` opens the selected note's body in your editor.
 - `t` edits the title and tags.
+- `m` moves the selected note to a different path (relative to the notes directory).
 - `/` starts search.
 - `j`/`k` or arrow keys navigate.
 - `d` deletes the selected note.
@@ -38,7 +39,7 @@ From the note list:
 - `s` opens settings (theme and notes directory).
 - `q` quits.
 
-While viewing a note: `e` edit body, `t` edit tags, `d` delete, `Esc` back, `Up`/`Down` scroll.
+While viewing a note: `e` edit body, `t` edit tags, `m` move, `d` delete, `Esc` back, `Up`/`Down` scroll.
 
 ## Search Filters
 
@@ -62,8 +63,13 @@ theme:
 
 Notes are stored as directories under `notes_dir`. Each directory contains a
 `README.md` (the Markdown body) and a `manifest.json` (title, tags, timestamps).
-Point `notes_dir` at a git repository to version control your notes; `git` is the
-history and sync mechanism. Changing `notes_dir` takes effect on the next launch.
+A note can live at any depth — for example `notes_dir/docs/github/README.md` —
+and is discovered by its `README.md`. The leaf directory name follows the title
+(renaming a note renames that folder); intermediate folders are free-form and
+left as you organize them. If a directory has a `README.md` but no `manifest.json`,
+bubble-note creates the manifest on startup. Point `notes_dir` at a git
+repository to version control your notes; `git` is the history and sync
+mechanism. Changing `notes_dir` takes effect on the next launch.
 
 ## Migrating from the legacy SQLite database
 

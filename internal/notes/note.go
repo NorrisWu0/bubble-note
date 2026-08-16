@@ -7,6 +7,7 @@ type Note struct {
 	ID            string
 	Title         string
 	Content       string
+	Parent        string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 	CurrentRevID  string
@@ -50,7 +51,7 @@ type FileNote struct {
 }
 
 type Repository interface {
-	CreateNote(title, content string, tags []string) (Note, error)
+	CreateNote(parent, title, content string, tags []string) (Note, error)
 	GetNote(id string) (Note, error)
 	ListNotes(filter Filter) ([]Note, error)
 	SaveNote(id, title, content string, tags []string) (Note, error)

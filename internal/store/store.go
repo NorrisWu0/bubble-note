@@ -1,8 +1,9 @@
 package store
 
 import (
-	"crypto/rand"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/norriswu0/bubble-note/internal/database/sqlite"
@@ -86,17 +87,17 @@ func (s *Store) GetNote(id string) (notes.Note, error) {
 	return entry.Note, err
 }
 
-func (s *Store) CreateNote(title, content string, tags []string) (notes.Note, error) {
+func (s *Store) CreateNote(parent, title, content string, tags []string) (notes.Note, error) {
 	now := time.Now().UTC()
 	note := notes.Note{
-		ID:        newID(),
+		ID:        notes.NewID(),
 		Title:     title,
 		Content:   content,
 		Tags:      notes.NormalizeTags(tags),
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	dir := s.files.Slug(title, note.ID)
+	dir := joinDir(parent, s.files.Slug(parent, title, note.ID))
 	if err := s.files.Write(dir, note); err != nil {
 		return notes.Note{}, err
 	}
@@ -116,7 +117,7 @@ func (s *Store) SaveNote(id, title, content string, tags []string) (notes.Note, 
 	note.Content = content
 	note.Tags = notes.NormalizeTags(tags)
 	note.UpdatedAt = time.Now().UTC()
-	newDir := s.files.Slug(title, id)
+	newDir := joinDir(parentDir(existing.Dir), s.files.Slug(parentDir(existing.Dir), title, id))
 	if existing.Dir != newDir {
 		if err := s.files.Rename(existing.Dir, newDir); err != nil {
 			return notes.Note{}, err
@@ -125,6 +126,28 @@ func (s *Store) SaveNote(id, title, content string, tags []string) (notes.Note, 
 	if err := s.files.Write(newDir, note); err != nil {
 		return notes.Note{}, err
 	}
+	if err := s.index.Upsert(notes.FileNote{Note: note, Dir: newDir}); err != nil {
+		return notes.Note{}, err
+	}
+	return note, nil
+}
+
+// MoveNote relocates a note to a new parent directory, keeping its title and
+// leaf directory name unchanged.
+func (s *Store) MoveNote(id, parent string) (notes.Note, error) {
+	existing, err := s.index.Get(id)
+	if err != nil {
+		return notes.Note{}, err
+	}
+	note := existing.Note
+	leaf := s.files.Slug(parent, note.Title, id)
+	newDir := joinDir(parent, leaf)
+	if existing.Dir != newDir {
+		if err := s.files.Rename(existing.Dir, newDir); err != nil {
+			return notes.Note{}, err
+		}
+	}
+	note.Parent = parent
 	if err := s.index.Upsert(notes.FileNote{Note: note, Dir: newDir}); err != nil {
 		return notes.Note{}, err
 	}
@@ -142,12 +165,20 @@ func (s *Store) DeleteNote(id string) error {
 	return s.index.Delete(id)
 }
 
-func newID() string {
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		panic(fmt.Sprintf("generate identifier: %v", err))
+// parentDir returns the parent path of a note directory, or "" at the root.
+func parentDir(dir string) string {
+	if idx := strings.LastIndex(dir, string(filepath.Separator)); idx >= 0 {
+		return dir[:idx]
 	}
-	return fmt.Sprintf("%x-%x-%x-%x-%x", bytes[0:4], bytes[4:6], bytes[6:8], bytes[8:10], bytes[10:16])
+	return ""
+}
+
+// joinDir joins a parent path and a leaf name into a relative directory path.
+func joinDir(parent, leaf string) string {
+	if parent == "" {
+		return leaf
+	}
+	return filepath.Join(parent, leaf)
 }
 
 var _ notes.Repository = (*Store)(nil)

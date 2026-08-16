@@ -10,8 +10,8 @@ import (
 
 type NoteRow struct {
 	Title    string
+	Path     string
 	Updated  string
-	Excerpt  string
 	Tags     []string
 	Selected bool
 }
@@ -56,23 +56,24 @@ func RenderList(model ListModel, palette theme.Palette) string {
 	}
 	var body strings.Builder
 	if len(model.Rows) == 0 {
-		body.WriteString("No notes found. Press n to create one.\n")
+		body.WriteString("No notes found. Press a to create one.\n")
 	}
 	for _, row := range model.Rows {
 		marker := "  "
 		if row.Selected {
 			marker = ">>"
 		}
-		line := fmt.Sprintf("%s %-28s %s", marker, truncate(row.Title, 28), row.Updated)
+		pathLabel := row.Path
+		if pathLabel == "" {
+			pathLabel = "(root)"
+		}
+		line := fmt.Sprintf("%s %-24s %-24s %s", marker, truncate(row.Title, 24), truncate(pathLabel, 24), row.Updated)
 		if row.Selected {
 			line = selected(line, palette)
 		}
 		body.WriteString(line + "\n")
-		if row.Selected {
-			body.WriteString("   " + muted(truncate(strings.ReplaceAll(row.Excerpt, "\n", " "), contentWidth(model.Width)-8), palette) + "\n")
-			if len(row.Tags) > 0 {
-				body.WriteString("   " + tag("#"+strings.Join(row.Tags, " #"), palette) + "\n")
-			}
+		if row.Selected && len(row.Tags) > 0 {
+			body.WriteString("   " + tag("#"+strings.Join(row.Tags, " #"), palette) + "\n")
 		}
 	}
 	if body.Len() > 0 {
@@ -84,7 +85,7 @@ func RenderList(model ListModel, palette theme.Palette) string {
 	}
 	panelHeight := contentHeight(model.Height)
 	notePanel := panel(noteContent, panelHeight-1, true, model.Width, palette)
-	footer := "n new   enter view   e edit   t tags   / search   d delete   r refresh   g git   s settings   q quit"
+	footer := "a new   enter view   e edit   t tags   m move   / search   d delete   r refresh   g git   s settings   q quit"
 	if model.GitStatus != "" {
 		footer = model.GitStatus + "   |   " + footer
 	}
@@ -110,6 +111,80 @@ func RenderReader(model ReaderModel, palette theme.Palette) string {
 	metadata := field("TAGS", tagList(model.Tags, palette), false, palette)
 	body := panel(model.Body, contentHeight(model.Height), false, model.Width, palette)
 	return header + "\n" + metadata + "\n" + body + "\n" + footBar("e edit   t tags   d delete   up/down scroll   esc back   q quit", model.Width, palette)
+}
+
+type CreateNoteModel struct {
+	Width       int
+	Height      int
+	PathView    string
+	TitleView   string
+	TagsView    string
+	PathActive  bool
+	TitleActive bool
+	TagsActive  bool
+	Error       string
+}
+
+func RenderCreateNoteModal(model CreateNoteModel, palette theme.Palette) string {
+	body := field("PATH", model.PathView, model.PathActive, palette) + "\n\n" +
+		field("TITLE", model.TitleView, model.TitleActive, palette) + "\n\n" +
+		field("TAGS", model.TagsView, model.TagsActive, palette)
+	if model.Error != "" {
+		body += "\n\n" + lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Danger)).Render(model.Error)
+	}
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(palette.Primary)).Render("NEW NOTE")
+	modal := title + "\n\n" + body + "\n\n" + muted("enter create   esc cancel", palette)
+	modalWidth := model.Width - 10
+	if modalWidth < 40 {
+		modalWidth = 40
+	}
+	width := model.Width
+	if width <= 0 {
+		width = 80
+	}
+	height := model.Height
+	if height <= 0 {
+		height = 24
+	}
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, panel(modal, 0, true, modalWidth, palette), lipgloss.WithWhitespaceChars(" "))
+}
+
+type MoveNoteModel struct {
+	Width      int
+	Height     int
+	PathView   string
+	PathActive bool
+	Error      string
+	Hint       string
+	HintOK     bool
+}
+
+func RenderMoveNoteModal(model MoveNoteModel, palette theme.Palette) string {
+	body := field("PATH", model.PathView, model.PathActive, palette)
+	if model.Error != "" {
+		body += "\n\n" + lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Danger)).Render(model.Error)
+	} else if model.Hint != "" {
+		color := palette.Secondary
+		if !model.HintOK {
+			color = palette.Danger
+		}
+		body += "\n\n" + lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(model.Hint)
+	}
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(palette.Primary)).Render("MOVE NOTE")
+	modal := title + "\n\n" + body + "\n\n" + muted("enter move   esc cancel", palette)
+	modalWidth := model.Width - 10
+	if modalWidth < 40 {
+		modalWidth = 40
+	}
+	width := model.Width
+	if width <= 0 {
+		width = 80
+	}
+	height := model.Height
+	if height <= 0 {
+		height = 24
+	}
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, panel(modal, 0, true, modalWidth, palette), lipgloss.WithWhitespaceChars(" "))
 }
 
 func topBar(width int, noteTitle, state string, palette theme.Palette) string {

@@ -158,6 +158,7 @@ func scanFileNote(row rowScanner) (notes.FileNote, error) {
 		return notes.FileNote{}, err
 	}
 	note.Tags = parseTags(tagsJSON)
+	note.Parent = notes.ParentOf(dir)
 	var err error
 	note.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
 	if err != nil {

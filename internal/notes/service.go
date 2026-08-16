@@ -12,8 +12,8 @@ func (s *Service) List(filter Filter) ([]Note, error) {
 	return s.repository.ListNotes(filter)
 }
 
-func (s *Service) Create(title, content string, tags []string) (Note, error) {
-	return s.repository.CreateNote(title, content, NormalizeTags(tags))
+func (s *Service) Create(parent, title, content string, tags []string) (Note, error) {
+	return s.repository.CreateNote(parent, title, content, NormalizeTags(tags))
 }
 
 func (s *Service) Save(id, title, content string, tags []string) (Note, error) {

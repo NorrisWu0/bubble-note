@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -22,14 +23,9 @@ const (
 	listScreen screen = iota
 	viewScreen
 	formScreen
+	createScreen
+	moveScreen
 	settingsScreen
-)
-
-type formMode int
-
-const (
-	formNew formMode = iota
-	formEdit
 )
 
 // Store is the concrete note store surface the app needs beyond the notes
@@ -40,6 +36,7 @@ type Store interface {
 	Path(id string) (string, error)
 	Refresh() error
 	Reload(id string) (notes.Note, error)
+	MoveNote(id, parent string) (notes.Note, error)
 }
 
 type Model struct {
@@ -52,10 +49,10 @@ type Model struct {
 	search    textinput.Model
 	title     textinput.Model
 	tags      textinput.Model
+	path      textinput.Model
 	viewer    viewport.Model
 	viewNote  notes.Note
 	searching bool
-	form      formMode
 	formID    string
 	formNote  notes.Note
 	status    string
@@ -64,6 +61,17 @@ type Model struct {
 	palette   theme.Palette
 	editor    string
 	gitClient string
+
+	createFocus      int
+	createError      string
+	createPathHint   string
+	createPathHintOK bool
+	pendingView      string
+
+	moveID     string
+	moveError  string
+	moveHint   string
+	moveHintOK bool
 
 	confirmingDelete bool
 	deletingNoteID   string
@@ -94,6 +102,9 @@ func New(store Store, cfg config.Config, configPath string, palettes ...theme.Pa
 	title.Prompt = "Title: "
 	tags := textinput.New()
 	tags.Prompt = "Tags:  "
+	path := textinput.New()
+	path.Prompt = "Path:  "
+	path.Placeholder = "e.g. journal/bubble-note"
 	palette := theme.Default()
 	if len(palettes) > 0 {
 		palette = palettes[0]
@@ -106,6 +117,7 @@ func New(store Store, cfg config.Config, configPath string, palettes ...theme.Pa
 		search:        search,
 		title:         title,
 		tags:          tags,
+		path:          path,
 		viewer:        viewer,
 		palette:       palette,
 		editor:        cfg.EditorCommand(),
@@ -176,6 +188,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case formScreen:
 		return m.updateForm(msg)
+	case createScreen:
+		return m.updateCreate(msg)
+	case moveScreen:
+		return m.updateMove(msg)
 	case viewScreen:
 		return m.updateView(msg)
 	case settingsScreen:
@@ -190,15 +206,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleEditorDone(msg editorDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.status = "Editor error: " + msg.err.Error()
+		m.pendingView = ""
 		return m, tea.Batch(m.load, m.loadGit)
 	}
 	note, err := m.store.Reload(msg.noteID)
 	if err != nil {
 		m.status = "Reload error: " + err.Error()
+		m.pendingView = ""
 		return m, tea.Batch(m.load, m.loadGit)
 	}
 	m.status = "Edited " + note.Title
-	if m.screen == viewScreen && m.viewNote.ID == note.ID {
+	if msg.noteID == m.pendingView {
+		m.pendingView = ""
+		m.beginView(note)
+	} else if m.screen == viewScreen && m.viewNote.ID == note.ID {
 		m.viewNote = note
 		m.viewer.SetContent(view.RenderMarkdown(view.Note{Title: note.Title, Content: note.Content}, m.contentWidth()-4, m.palette))
 	}
@@ -248,8 +269,8 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cursor < len(m.notes)-1 {
 			m.cursor++
 		}
-	case "n":
-		return m, m.beginForm(formNew, notes.Note{})
+	case "a":
+		m.beginCreate()
 	case "enter":
 		if len(m.notes) > 0 {
 			m.beginView(m.notes[m.cursor])
@@ -260,7 +281,11 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case "t":
 		if len(m.notes) > 0 {
-			return m, m.beginForm(formEdit, m.notes[m.cursor])
+			m.beginForm(m.notes[m.cursor])
+		}
+	case "m":
+		if len(m.notes) > 0 {
+			m.beginMove(m.notes[m.cursor])
 		}
 	case "/":
 		m.searching = true
@@ -293,7 +318,11 @@ func (m Model) updateView(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "e":
 			return m, m.openEditor(m.viewNote)
 		case "t":
-			return m, m.beginForm(formEdit, m.viewNote)
+			m.beginForm(m.viewNote)
+			return m, nil
+		case "m":
+			m.beginMove(m.viewNote)
+			return m, nil
 		case "d":
 			m.confirmingDelete = true
 			m.deletingNoteID = m.viewNote.ID
@@ -328,16 +357,16 @@ func (m Model) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmd, m.load)
 }
 
-func (m *Model) beginForm(mode formMode, note notes.Note) tea.Cmd {
+func (m *Model) beginForm(note notes.Note) {
 	m.screen = formScreen
-	m.form = mode
 	m.formNote = note
 	m.formID = note.ID
+	m.title.Prompt = "Title: "
+	m.title.Placeholder = ""
 	m.title.SetValue(note.Title)
 	m.tags.SetValue(strings.Join(note.Tags, ", "))
 	m.focusField(0)
 	m.status = ""
-	return nil
 }
 
 func (m Model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -378,30 +407,129 @@ func (m Model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) submitForm() tea.Cmd {
 	tags := strings.Split(m.tags.Value(), ",")
-	switch m.form {
-	case formNew:
-		note, err := m.service.Create(m.title.Value(), "", tags)
-		if err != nil {
-			m.status = "Create failed: " + err.Error()
-			return nil
-		}
-		if !commandExists(m.editor) {
-			m.status = "Created " + note.Title + "; editor not found: " + m.editor
+	note, err := m.service.Save(m.formID, m.title.Value(), m.formNote.Content, tags)
+	if err != nil {
+		m.status = "Save failed: " + err.Error()
+		return nil
+	}
+	m.status = "Saved " + note.Title
+	m.screen = listScreen
+	return tea.Batch(m.load, m.loadGit)
+}
+
+func (m *Model) beginCreate() {
+	m.screen = createScreen
+	m.createFocus = 0
+	m.createError = ""
+	m.createPathHint = ""
+	m.createPathHintOK = true
+	m.path.SetValue("")
+	m.title.SetValue("")
+	m.tags.SetValue("")
+	m.focusCreate(0)
+}
+
+func (m *Model) focusCreate(field int) {
+	m.path.Blur()
+	m.title.Blur()
+	m.tags.Blur()
+	m.createFocus = field
+	switch field {
+	case 0:
+		m.path.Focus()
+	case 1:
+		m.title.Focus()
+	case 2:
+		m.tags.Focus()
+	}
+}
+
+func (m Model) updateCreate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	key, ok := msg.(tea.KeyMsg)
+	if ok {
+		switch key.String() {
+		case "esc":
 			m.screen = listScreen
-			return tea.Batch(m.load, m.loadGit)
+			m.createError = ""
+			return m, nil
+		case "enter":
+			return m, m.submitCreate()
+		case "tab":
+			m.focusCreate((m.createFocus + 1) % 3)
+			return m, nil
+		case "shift+tab":
+			m.focusCreate((m.createFocus + 2) % 3)
+			return m, nil
 		}
-		m.status = "Created " + note.Title
-		return tea.Batch(m.load, m.loadGit, m.runEditor(note.ID))
-	default:
-		note, err := m.service.Save(m.formID, m.title.Value(), m.formNote.Content, tags)
-		if err != nil {
-			m.status = "Save failed: " + err.Error()
-			return nil
+	}
+	var cmd tea.Cmd
+	switch m.createFocus {
+	case 0:
+		m.path, cmd = m.path.Update(msg)
+	case 1:
+		m.title, cmd = m.title.Update(msg)
+	case 2:
+		m.tags, cmd = m.tags.Update(msg)
+	}
+	m.refreshCreateValidation()
+	return m, cmd
+}
+
+func (m *Model) refreshCreateValidation() {
+	m.createError = m.createValidationError()
+	parent := notes.NormalizePath(m.path.Value())
+	if parent == "" {
+		m.createPathHint = ""
+		m.createPathHintOK = true
+		return
+	}
+	m.createPathHint, m.createPathHintOK = notesDirState(filepath.Join(m.store.NotesDir(), parent))
+}
+
+func (m Model) createValidationError() string {
+	if title := strings.TrimSpace(m.title.Value()); title != "" && !notes.ValidTitle(title) {
+		return "name may only contain letters, numbers, spaces and hyphens"
+	}
+	for _, segment := range strings.Split(m.path.Value(), "/") {
+		if segment = strings.TrimSpace(segment); segment != "" && !notes.ValidSegment(segment) {
+			return "path may only contain letters, numbers and hyphens"
 		}
-		m.status = "Saved " + note.Title
-		m.screen = listScreen
+	}
+	for _, tag := range strings.Split(m.tags.Value(), ",") {
+		if tag = strings.TrimSpace(tag); tag != "" && !notes.ValidSegment(tag) {
+			return "tags may only contain letters, numbers and hyphens"
+		}
+	}
+	return ""
+}
+
+func (m *Model) submitCreate() tea.Cmd {
+	title := strings.TrimSpace(m.title.Value())
+	if title == "" {
+		m.createError = "title is required"
+		return nil
+	}
+	if err := m.createValidationError(); err != "" {
+		m.createError = err
+		return nil
+	}
+	parent := notes.NormalizePath(m.path.Value())
+	tags := strings.Split(m.tags.Value(), ",")
+	note, err := m.service.Create(parent, notes.NormalizeTitle(title), "", tags)
+	if err != nil {
+		m.createError = "Create failed: " + err.Error()
+		return nil
+	}
+	m.createError = ""
+	if !commandExists(m.editor) {
+		m.status = "Created " + note.Title + "; editor not found: " + m.editor
+		m.beginView(note)
 		return tea.Batch(m.load, m.loadGit)
 	}
+	m.pendingView = note.ID
+	m.screen = listScreen
+	m.status = "Created " + note.Title
+	return tea.Batch(m.load, m.loadGit, m.runEditor(note.ID))
 }
 
 func (m *Model) focusField(field int) {
@@ -412,6 +540,73 @@ func (m *Model) focusField(field int) {
 	} else {
 		m.tags.Focus()
 	}
+}
+
+func (m *Model) beginMove(note notes.Note) {
+	m.screen = moveScreen
+	m.moveID = note.ID
+	m.moveError = ""
+	m.moveHint = ""
+	m.moveHintOK = true
+	m.path.SetValue(note.Parent)
+	m.path.Prompt = "Path:  "
+	m.path.Placeholder = "e.g. journal/bubble-note (empty = root)"
+	m.path.Focus()
+	m.refreshMoveValidation()
+}
+
+func (m Model) updateMove(msg tea.Msg) (tea.Model, tea.Cmd) {
+	key, ok := msg.(tea.KeyMsg)
+	if ok {
+		switch key.String() {
+		case "esc":
+			m.screen = listScreen
+			m.moveError = ""
+			return m, nil
+		case "enter":
+			return m, m.submitMove()
+		}
+	}
+	var cmd tea.Cmd
+	m.path, cmd = m.path.Update(msg)
+	m.refreshMoveValidation()
+	return m, cmd
+}
+
+func (m *Model) refreshMoveValidation() {
+	path := m.path.Value()
+	for _, segment := range strings.Split(path, "/") {
+		if segment = strings.TrimSpace(segment); segment != "" && !notes.ValidSegment(segment) {
+			m.moveError = "path may only contain letters, numbers and hyphens"
+			m.moveHint = ""
+			m.moveHintOK = true
+			return
+		}
+	}
+	m.moveError = ""
+	parent := notes.NormalizePath(path)
+	if parent == "" {
+		m.moveHint = ""
+		m.moveHintOK = true
+		return
+	}
+	m.moveHint, m.moveHintOK = notesDirState(filepath.Join(m.store.NotesDir(), parent))
+}
+
+func (m *Model) submitMove() tea.Cmd {
+	if m.moveError != "" {
+		return nil
+	}
+	parent := notes.NormalizePath(m.path.Value())
+	note, err := m.store.MoveNote(m.moveID, parent)
+	if err != nil {
+		m.moveError = "Move failed: " + err.Error()
+		return nil
+	}
+	m.moveID = ""
+	m.screen = listScreen
+	m.status = "Moved " + note.Title
+	return tea.Batch(m.load, m.loadGit)
 }
 
 func (m *Model) openEditor(note notes.Note) tea.Cmd {
@@ -669,7 +864,7 @@ func (m Model) View() string {
 		content = view.RenderForm(view.FormModel{
 			Width:       m.width,
 			Height:      m.height,
-			Heading:     formHeading(m.form),
+			Heading:     "EDIT NOTE",
 			TitleView:   m.title.View(),
 			TagsView:    m.tags.View(),
 			TitleActive: m.title.Focused(),
@@ -683,7 +878,7 @@ func (m Model) View() string {
 	default:
 		rows := make([]view.NoteRow, len(m.notes))
 		for i, note := range m.notes {
-			rows[i] = view.NoteRow{Title: note.Title, Updated: note.UpdatedAt.Local().Format("2006-01-02 15:04"), Excerpt: note.Content, Tags: note.Tags, Selected: i == m.cursor}
+			rows[i] = view.NoteRow{Title: note.Title, Path: note.Parent, Updated: note.UpdatedAt.Local().Format("2006-01-02 15:04"), Tags: note.Tags, Selected: i == m.cursor}
 		}
 		searchInput := ""
 		if m.searching {
@@ -700,17 +895,34 @@ func (m Model) View() string {
 			GitStatus:   gitStatusLabel(m.gitInfo),
 		}, m.palette)
 	}
+	if m.screen == createScreen {
+		return view.RenderCreateNoteModal(view.CreateNoteModel{
+			Width:       m.width,
+			Height:      m.height,
+			PathView:    m.path.View(),
+			TitleView:   m.title.View(),
+			TagsView:    m.tags.View(),
+			PathActive:  m.createFocus == 0,
+			TitleActive: m.createFocus == 1,
+			TagsActive:  m.createFocus == 2,
+			Error:       m.createError,
+		}, m.palette)
+	}
+	if m.screen == moveScreen {
+		return view.RenderMoveNoteModal(view.MoveNoteModel{
+			Width:      m.width,
+			Height:     m.height,
+			PathView:   m.path.View(),
+			PathActive: true,
+			Error:      m.moveError,
+			Hint:       m.moveHint,
+			HintOK:     m.moveHintOK,
+		}, m.palette)
+	}
 	if m.confirmingDelete {
 		return view.RenderConfirmModal(content, view.ConfirmModel{Title: "Delete note?", Message: "The note's files will be removed from the notes directory.", Actions: "[d] Delete   [c] Cancel"}, m.width, m.height, m.palette)
 	}
 	return content
-}
-
-func formHeading(mode formMode) string {
-	if mode == formNew {
-		return "NEW NOTE"
-	}
-	return "EDIT NOTE"
 }
 
 func gitStatusLabel(info git.Info) string {

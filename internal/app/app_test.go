@@ -40,7 +40,14 @@ func (s *fakeStore) Reload(id string) (notes.Note, error) {
 	return note, nil
 }
 
-func (s *fakeStore) CreateNote(title, content string, tags []string) (notes.Note, error) {
+func (s *fakeStore) MoveNote(id, parent string) (notes.Note, error) {
+	note := s.notes[id]
+	note.Parent = parent
+	s.notes[id] = note
+	return note, nil
+}
+
+func (s *fakeStore) CreateNote(parent, title, content string, tags []string) (notes.Note, error) {
 	s.createCount++
 	note := notes.Note{ID: "created-" + itoa(s.createCount), Title: title, Content: content, Tags: notes.NormalizeTags(tags), CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	s.notes[note.ID] = note
@@ -137,22 +144,69 @@ func TestMissingGitClientPromptsInstall(t *testing.T) {
 	}
 }
 
-func TestNewNoteFormCreatesNote(t *testing.T) {
+func TestCreateNotePopup(t *testing.T) {
 	store := newFakeStore()
 	model := testModel(t, store)
 	model.editor = "bubble-note-missing-editor-xyz"
 
-	press(t, &model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
-	if model.screen != formScreen || model.form != formNew {
-		t.Fatal("n should open the new-note form")
+	press(t, &model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	if model.screen != createScreen {
+		t.Fatal("a should open the create popup")
 	}
-	press(t, &model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("my note")})
+	press(t, &model, tea.KeyMsg{Type: tea.KeyTab})
+	press(t, &model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("My Note")})
 	press(t, &model, tea.KeyMsg{Type: tea.KeyEnter})
 	if store.createCount != 1 {
 		t.Fatalf("create count = %d, want 1", store.createCount)
 	}
+	if model.screen != viewScreen {
+		t.Fatal("creating should open the note view when no editor is available")
+	}
+	found := false
+	for _, note := range store.notes {
+		if note.Title == "my-note" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("title with spaces should be normalized to hyphens")
+	}
+}
+
+func TestCreateNoteRejectsInvalidName(t *testing.T) {
+	store := newFakeStore()
+	model := testModel(t, store)
+
+	press(t, &model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	press(t, &model, tea.KeyMsg{Type: tea.KeyTab})
+	press(t, &model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("bad_name")})
+	if !strings.Contains(model.createError, "letters, numbers") {
+		t.Fatalf("createError = %q, want charset error", model.createError)
+	}
+	press(t, &model, tea.KeyMsg{Type: tea.KeyEnter})
+	if store.createCount != 0 {
+		t.Fatalf("create count = %d, want 0 (invalid name)", store.createCount)
+	}
+}
+
+func TestMoveNotePopup(t *testing.T) {
+	store := newFakeStore()
+	store.notes["a"] = notes.Note{ID: "a", Title: "note", Parent: "journal", UpdatedAt: time.Now()}
+	model := testModel(t, store)
+	model.notes = []notes.Note{store.notes["a"]}
+
+	press(t, &model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	if model.screen != moveScreen {
+		t.Fatal("m should open the move popup")
+	}
+	press(t, &model, tea.KeyMsg{Type: tea.KeyCtrlU})
+	press(t, &model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("docs/github")})
+	press(t, &model, tea.KeyMsg{Type: tea.KeyEnter})
+	if store.notes["a"].Parent != "docs/github" {
+		t.Fatalf("parent = %q, want docs/github", store.notes["a"].Parent)
+	}
 	if model.screen != listScreen {
-		t.Fatal("creating should return to the list when no editor is available")
+		t.Fatal("move should return to the list")
 	}
 }
 
@@ -163,7 +217,7 @@ func TestEditFormSavesTitleAndTags(t *testing.T) {
 	model.notes = []notes.Note{store.notes["a"]}
 
 	press(t, &model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
-	if model.screen != formScreen || model.form != formEdit {
+	if model.screen != formScreen {
 		t.Fatal("t should open the edit form")
 	}
 	press(t, &model, tea.KeyMsg{Type: tea.KeyCtrlU})

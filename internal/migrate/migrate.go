@@ -119,7 +119,7 @@ func Export(notesDir string, legacyNotes []LegacyNote) (exported, skipped int, e
 		return 0, 0, err
 	}
 	for _, legacy := range legacyNotes {
-		dir := store.Slug(legacy.Title, legacy.ID)
+		dir := store.Slug("", legacy.Title, legacy.ID)
 		if store.Exists(dir) {
 			skipped++
 			continue
