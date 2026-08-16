@@ -1,6 +1,8 @@
 package app
 
 import (
+	"errors"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -75,6 +77,8 @@ type Model struct {
 	settingsInput  textinput.Model
 	settingsFocus  int
 	settingsActive bool
+	settingsHint   string
+	settingsHintOK bool
 }
 
 const (
@@ -486,6 +490,8 @@ func (m *Model) beginSettings() {
 	m.settingsActive = false
 	m.settingsInput = textinput.New()
 	m.settingsInput.Blur()
+	m.settingsHint = ""
+	m.settingsHintOK = true
 }
 
 var catppuccinFlavors = []string{"latte", "frappe", "macchiato", "mocha"}
@@ -545,6 +551,7 @@ func (m Model) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.settingsInput, cmd = m.settingsInput.Update(msg)
 			m.settingsDirty = m.settingsDirty || m.settingsInput.Value() != m.savedSettings.NotesDir
+			m.refreshNotesDirHint()
 			return m, cmd
 		}
 		return m, nil
@@ -553,6 +560,7 @@ func (m Model) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.settingsInput, cmd = m.settingsInput.Update(msg)
 		m.settingsDirty = m.settingsDirty || m.settingsInput.Value() != m.savedSettings.NotesDir
+		m.refreshNotesDirHint()
 		return m, cmd
 	}
 	return m, nil
@@ -567,6 +575,29 @@ func (m *Model) beginSettingsInput() {
 	}
 	m.settingsInput.Focus()
 	m.settingsActive = true
+	m.refreshNotesDirHint()
+}
+
+func (m *Model) refreshNotesDirHint() {
+	m.settingsHint, m.settingsHintOK = notesDirState(m.settingsInput.Value())
+}
+
+func notesDirState(path string) (string, bool) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "empty — uses the default directory", true
+	}
+	info, err := os.Stat(path)
+	if err == nil {
+		if !info.IsDir() {
+			return "not a directory", false
+		}
+		return "valid directory", true
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return "does not exist — will be created", true
+	}
+	return "cannot access: " + err.Error(), false
 }
 
 func (m *Model) commitSettingsInput() {
@@ -648,7 +679,7 @@ func (m Model) View() string {
 	case viewScreen:
 		content = view.RenderReader(view.ReaderModel{Width: m.width, Height: m.height, Title: m.viewNote.Title, Tags: m.viewNote.Tags, Body: m.viewer.View()}, m.palette)
 	case settingsScreen:
-		content = view.RenderSettings(view.SettingsModel{Width: m.width, Height: m.height, Rows: m.settingRows(), Status: m.status, Dirty: m.settingsDirty, Input: m.settingsInput.View(), InputActive: m.settingsActive}, m.palette)
+		content = view.RenderSettings(view.SettingsModel{Width: m.width, Height: m.height, Rows: m.settingRows(), Status: m.status, Dirty: m.settingsDirty, Input: m.settingsInput.View(), InputActive: m.settingsActive, Hint: m.settingsHint, HintOK: m.settingsHintOK}, m.palette)
 	default:
 		rows := make([]view.NoteRow, len(m.notes))
 		for i, note := range m.notes {

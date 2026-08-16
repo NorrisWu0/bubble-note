@@ -1,6 +1,7 @@
 package app
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -260,5 +261,28 @@ func TestGitStatusLabel(t *testing.T) {
 	}
 	if got := gitStatusLabel(git.Info{IsRepo: true}); got != "git: up-to-date" {
 		t.Fatalf("clean label = %q", got)
+	}
+}
+
+func TestNotesDirState(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "file"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := notesDirState(""); !ok {
+		t.Fatal("empty notes dir should be valid (uses default)")
+	}
+	if _, ok := notesDirState(filepath.Join(root, "real")); !ok {
+		t.Fatal("existing directory should be valid")
+	}
+	if _, ok := notesDirState(filepath.Join(root, "file")); ok {
+		t.Fatal("a file path should be invalid")
+	}
+	if label, ok := notesDirState(filepath.Join(root, "new")); !ok || label == "" {
+		t.Fatal("a non-existent path should be valid (will be created)")
 	}
 }

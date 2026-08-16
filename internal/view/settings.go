@@ -24,6 +24,8 @@ type SettingsModel struct {
 	Dirty       bool
 	Input       string
 	InputActive bool
+	Hint        string
+	HintOK      bool
 }
 
 func RenderSettings(model SettingsModel, palette theme.Palette) string {
@@ -58,6 +60,14 @@ func RenderSettings(model SettingsModel, palette theme.Palette) string {
 			line = selected(line, palette)
 		}
 		body.WriteString(line + "\n")
+	}
+	if model.Hint != "" {
+		body.WriteString("\n")
+		color := palette.Danger
+		if model.HintOK {
+			color = palette.Secondary
+		}
+		body.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render("  "+model.Hint) + "\n")
 	}
 	footer := "up/down navigate   enter edit/cycle   ctrl-s save   esc back"
 	if model.Status != "" {
