@@ -15,8 +15,14 @@ func main() {
 }
 
 func run() error {
-	if len(os.Args) > 1 && os.Args[1] == "migrate" {
-		return cli.RunMigrate(os.Args[2:])
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "migrate":
+			return cli.RunMigrate(os.Args[2:])
+		case "help", "-h", "--help":
+			cli.PrintHelp(os.Stdout)
+			return nil
+		}
 	}
-	return cli.Run()
+	return cli.Run(os.Args[1:])
 }

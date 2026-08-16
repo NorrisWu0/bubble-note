@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,7 +15,17 @@ import (
 )
 
 // Run starts the bubble-note application.
-func Run() error {
+func Run(args []string) error {
+	fs := flag.NewFlagSet("bubble-note", flag.ContinueOnError)
+	notesDirFlag := fs.String("notes-dir", "", "open notes from this directory (overrides the configured notes_dir)")
+	fs.Usage = func() { PrintHelp(fs.Output()) }
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+
 	dir, err := config.UserPath()
 	if err != nil {
 		return err
@@ -32,6 +44,10 @@ func Run() error {
 	notesDir, err := cfg.NotesDirectory()
 	if err != nil {
 		return err
+	}
+	if *notesDirFlag != "" {
+		notesDir = *notesDirFlag
+		cfg.NotesDir = notesDir
 	}
 	noteStore, err := store.New(notesDir, filepath.Join(dir, "index.db"))
 	if err != nil {
