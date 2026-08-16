@@ -219,6 +219,38 @@ func TestSettingsCyclesThemeAndSaves(t *testing.T) {
 	}
 }
 
+func TestSettingsEditsNotesDir(t *testing.T) {
+	store := newFakeStore()
+	model := testModel(t, store)
+	model.beginSettings()
+
+	press(t, &model, tea.KeyMsg{Type: tea.KeyDown})
+	if model.settingsFocus != settingNotesDir {
+		t.Fatalf("focus = %d, want notes dir", model.settingsFocus)
+	}
+	press(t, &model, tea.KeyMsg{Type: tea.KeyEnter})
+	if !model.settingsActive {
+		t.Fatal("enter should activate the notes dir input")
+	}
+	press(t, &model, tea.KeyMsg{Type: tea.KeyCtrlU})
+	press(t, &model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/tmp/notes")})
+	press(t, &model, tea.KeyMsg{Type: tea.KeyCtrlS})
+
+	if model.settingsDirty {
+		t.Fatal("saving should clear the dirty flag")
+	}
+	if model.savedSettings.NotesDir != "/tmp/notes" {
+		t.Fatalf("saved notes dir = %q, want /tmp/notes", model.savedSettings.NotesDir)
+	}
+	cfg, err := config.Load(model.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.NotesDir != "/tmp/notes" {
+		t.Fatalf("config notes_dir = %q, want /tmp/notes", cfg.NotesDir)
+	}
+}
+
 func TestGitStatusLabel(t *testing.T) {
 	if got := gitStatusLabel(git.Info{}); got != "git: not initialized" {
 		t.Fatalf("non-repo label = %q", got)

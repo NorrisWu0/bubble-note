@@ -68,11 +68,19 @@ type Model struct {
 
 	gitInfo git.Info
 
-	settings      config.Config
-	savedSettings config.Config
-	configPath    string
-	settingsDirty bool
+	settings       config.Config
+	savedSettings  config.Config
+	configPath     string
+	settingsDirty  bool
+	settingsInput  textinput.Model
+	settingsFocus  int
+	settingsActive bool
 }
+
+const (
+	settingTheme = iota
+	settingNotesDir
+)
 
 func New(store Store, cfg config.Config, configPath string, palettes ...theme.Palette) Model {
 	search := textinput.New()
@@ -474,6 +482,10 @@ func (m *Model) beginSettings() {
 	m.screen = settingsScreen
 	m.settings = m.savedSettings
 	m.settingsDirty = false
+	m.settingsFocus = settingTheme
+	m.settingsActive = false
+	m.settingsInput = textinput.New()
+	m.settingsInput.Blur()
 }
 
 var catppuccinFlavors = []string{"latte", "frappe", "macchiato", "mocha"}
@@ -493,39 +505,115 @@ func (m Model) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = listScreen
 		return m, nil
 	case "ctrl+s":
+		m.commitSettingsInput()
 		if !m.settingsDirty {
 			return m, nil
 		}
-		palette, err := theme.Resolve(m.settings.Theme)
-		if err != nil {
-			m.status = "Theme error: " + err.Error()
+		m.saveSettings()
+		return m, nil
+	case "up", "k":
+		m.commitSettingsInput()
+		m.settingsFocus = previousSettingFocus(m.settingsFocus)
+		m.settingsActive = false
+		return m, nil
+	case "down", "j":
+		m.commitSettingsInput()
+		m.settingsFocus = nextSettingFocus(m.settingsFocus)
+		m.settingsActive = false
+		return m, nil
+	case "enter":
+		if m.settingsFocus == settingTheme {
+			m.settings.Theme.Flavor = nextCatppuccinFlavor(m.settings.Theme.Flavor)
+			m.applySelectedTheme()
+			m.settingsDirty = true
 			return m, nil
 		}
-		m.settings.Editor = m.savedSettings.Editor
-		m.settings.GitClient = m.savedSettings.GitClient
-		m.settings.NotesDir = m.savedSettings.NotesDir
-		if err := config.Save(m.configPath, m.settings); err != nil {
-			m.status = "Save settings failed: " + err.Error()
+		m.beginSettingsInput()
+		return m, nil
+	case "left", "right":
+		if m.settingsFocus == settingTheme {
+			if key.String() == "right" {
+				m.settings.Theme.Flavor = nextCatppuccinFlavor(m.settings.Theme.Flavor)
+			} else {
+				m.settings.Theme.Flavor = previousCatppuccinFlavor(m.settings.Theme.Flavor)
+			}
+			m.applySelectedTheme()
+			m.settingsDirty = true
 			return m, nil
 		}
-		m.savedSettings = m.settings
-		m.palette = palette
-		m.settingsDirty = false
-		m.status = "Saved settings"
+		if m.settingsActive {
+			var cmd tea.Cmd
+			m.settingsInput, cmd = m.settingsInput.Update(msg)
+			m.settingsDirty = m.settingsDirty || m.settingsInput.Value() != m.savedSettings.NotesDir
+			return m, cmd
+		}
 		return m, nil
-	case "enter", "right":
-		m.settings.Theme.Flavor = nextCatppuccinFlavor(m.settings.Theme.Flavor)
-		m.applySelectedTheme()
-		m.settingsDirty = true
-		return m, nil
-	case "left":
-		m.settings.Theme.Flavor = previousCatppuccinFlavor(m.settings.Theme.Flavor)
-		m.applySelectedTheme()
-		m.settingsDirty = true
-		return m, nil
+	}
+	if m.settingsActive {
+		var cmd tea.Cmd
+		m.settingsInput, cmd = m.settingsInput.Update(msg)
+		m.settingsDirty = m.settingsDirty || m.settingsInput.Value() != m.savedSettings.NotesDir
+		return m, cmd
 	}
 	return m, nil
 }
+
+func (m *Model) beginSettingsInput() {
+	m.settingsInput = textinput.New()
+	m.settingsInput.SetValue(m.effectiveNotesDir())
+	m.settingsInput.Width = m.contentWidth() - 30
+	if m.settingsInput.Width < 12 {
+		m.settingsInput.Width = 12
+	}
+	m.settingsInput.Focus()
+	m.settingsActive = true
+}
+
+func (m *Model) commitSettingsInput() {
+	if !m.settingsActive {
+		return
+	}
+	value := strings.TrimSpace(m.settingsInput.Value())
+	if value != m.settings.NotesDir {
+		m.settings.NotesDir = value
+		m.settingsDirty = true
+	}
+	m.settingsActive = false
+	m.settingsInput.Blur()
+}
+
+func (m *Model) saveSettings() {
+	palette, err := theme.Resolve(m.settings.Theme)
+	if err != nil {
+		m.status = "Theme error: " + err.Error()
+		return
+	}
+	if err := config.Save(m.configPath, m.settings); err != nil {
+		m.status = "Save settings failed: " + err.Error()
+		return
+	}
+	m.savedSettings = m.settings
+	m.palette = palette
+	m.settingsDirty = false
+	m.status = "Saved settings; notes_dir applies on next launch"
+}
+
+func (m Model) effectiveNotesDir() string {
+	dir, err := m.settings.NotesDirectory()
+	if err != nil {
+		return m.settings.NotesDir
+	}
+	return dir
+}
+
+func nextSettingFocus(focus int) int {
+	if focus == settingTheme {
+		return settingNotesDir
+	}
+	return settingTheme
+}
+
+func previousSettingFocus(focus int) int { return nextSettingFocus(focus) }
 
 func (m *Model) applySelectedTheme() {
 	palette, err := theme.Resolve(m.settings.Theme)
@@ -560,7 +648,7 @@ func (m Model) View() string {
 	case viewScreen:
 		content = view.RenderReader(view.ReaderModel{Width: m.width, Height: m.height, Title: m.viewNote.Title, Tags: m.viewNote.Tags, Body: m.viewer.View()}, m.palette)
 	case settingsScreen:
-		content = view.RenderSettings(view.SettingsModel{Width: m.width, Height: m.height, Rows: m.settingRows(), Status: m.status, Dirty: m.settingsDirty}, m.palette)
+		content = view.RenderSettings(view.SettingsModel{Width: m.width, Height: m.height, Rows: m.settingRows(), Status: m.status, Dirty: m.settingsDirty, Input: m.settingsInput.View(), InputActive: m.settingsActive}, m.palette)
 	default:
 		rows := make([]view.NoteRow, len(m.notes))
 		for i, note := range m.notes {
@@ -615,7 +703,8 @@ func gitStatusLabel(info git.Info) string {
 
 func (m Model) settingRows() []view.SettingRow {
 	return []view.SettingRow{
-		{Section: "GENERAL", Label: "Theme", Value: "< " + m.settings.Theme.Flavor + " >", Selected: true},
+		{Section: "GENERAL", Label: "Theme", Value: "< " + m.settings.Theme.Flavor + " >", Selected: m.settingsFocus == settingTheme},
+		{Section: "GENERAL", Label: "Notes dir", Value: m.effectiveNotesDir(), Selected: m.settingsFocus == settingNotesDir},
 	}
 }
 
