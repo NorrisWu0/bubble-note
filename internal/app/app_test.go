@@ -255,4 +255,10 @@ func TestGitStatusLabel(t *testing.T) {
 	if got := gitStatusLabel(git.Info{}); got != "git: not initialized" {
 		t.Fatalf("non-repo label = %q", got)
 	}
+	if got := gitStatusLabel(git.Info{IsRepo: true, Dirty: true}); got != "git: dirty" {
+		t.Fatalf("dirty label = %q", got)
+	}
+	if got := gitStatusLabel(git.Info{IsRepo: true}); got != "git: up-to-date" {
+		t.Fatalf("clean label = %q", got)
+	}
 }

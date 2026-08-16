@@ -686,19 +686,10 @@ func gitStatusLabel(info git.Info) string {
 	if !info.IsRepo {
 		return "git: not initialized"
 	}
-	parts := []string{"git:" + info.Branch}
 	if info.Dirty {
-		parts = append(parts, "dirty")
-	} else {
-		parts = append(parts, "clean")
+		return "git: dirty"
 	}
-	if info.Ahead > 0 {
-		parts = append(parts, "ahead "+itoa(info.Ahead))
-	}
-	if info.Behind > 0 {
-		parts = append(parts, "behind "+itoa(info.Behind))
-	}
-	return strings.Join(parts, " ")
+	return "git: up-to-date"
 }
 
 func (m Model) settingRows() []view.SettingRow {
