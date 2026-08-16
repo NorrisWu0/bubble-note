@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"path/filepath"
@@ -13,11 +14,15 @@ import (
 // notes directory. It is a one-shot, non-destructive command: the legacy
 // database is left untouched.
 func RunMigrate(args []string) error {
-	fs := flag.NewFlagSet("migrate", flag.ExitOnError)
+	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
 	dbPath := fs.String("db", "", "path to the legacy notes.db (default: ~/.config/bubble-note/notes.db)")
 	notesDir := fs.String("notes-dir", "", "destination notes directory (default: resolved from config)")
 	dryRun := fs.Bool("dry-run", false, "list what would be migrated without writing")
+	fs.Usage = func() { PrintHelp(fs.Output()) }
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 

@@ -108,3 +108,19 @@ func TestExportSkipsExistingDirectories(t *testing.T) {
 		t.Fatalf("second run exported = %d, skipped = %d, want 0/2", exported, skipped)
 	}
 }
+
+func TestReadLegacyRejectsMissingFile(t *testing.T) {
+	if _, err := ReadLegacy(filepath.Join(t.TempDir(), "missing.db")); err == nil {
+		t.Fatal("expected an error for a missing database")
+	}
+}
+
+func TestReadLegacyRejectsEmptyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty.db")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadLegacy(path); err == nil {
+		t.Fatal("expected an error for an empty database")
+	}
+}

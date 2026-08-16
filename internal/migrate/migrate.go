@@ -2,7 +2,9 @@ package migrate
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/norriswu0/bubble-note/internal/notes"
@@ -23,11 +25,32 @@ type LegacyNote struct {
 // ReadLegacy reads the latest content of every non-deleted note from the legacy
 // SQLite database (the pre-files schema).
 func ReadLegacy(dbPath string) ([]LegacyNote, error) {
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("legacy database not found: %s", dbPath)
+		}
+		return nil, fmt.Errorf("stat legacy database: %w", err)
+	}
+	if info.Size() == 0 {
+		return nil, fmt.Errorf("legacy database is empty: %s", dbPath)
+	}
+
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open legacy database: %w", err)
 	}
 	defer db.Close()
+
+	for _, table := range []string{"notes", "revisions"} {
+		exists, err := tableExists(db, table)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, fmt.Errorf("%s is not a legacy notes database (no %q table)", dbPath, table)
+		}
+	}
 
 	rows, err := db.Query(`SELECT n.id, n.title, r.content, n.created_at, n.updated_at
 		FROM notes n
@@ -60,6 +83,14 @@ func ReadLegacy(dbPath string) ([]LegacyNote, error) {
 		result = append(result, note)
 	}
 	return result, rows.Err()
+}
+
+func tableExists(db *sql.DB, table string) (bool, error) {
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 func legacyTags(db *sql.DB, noteID string) ([]string, error) {

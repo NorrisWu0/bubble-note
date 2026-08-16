@@ -35,7 +35,7 @@ From the note list:
 - `d` deletes the selected note.
 - `r` re-scans the notes directory and rebuilds the search index.
 - `g` opens lazygit in the notes directory (initializes the repo first if needed).
-- `s` opens settings (theme).
+- `s` opens settings (theme and notes directory).
 - `q` quits.
 
 While viewing a note: `e` edit body, `t` edit tags, `d` delete, `Esc` back, `Up`/`Down` scroll.
@@ -63,7 +63,20 @@ theme:
 Notes are stored as directories under `notes_dir`. Each directory contains a
 `README.md` (the Markdown body) and a `manifest.json` (title, tags, timestamps).
 Point `notes_dir` at a git repository to version control your notes; `git` is the
-history and sync mechanism.
+history and sync mechanism. Changing `notes_dir` takes effect on the next launch.
+
+## Migrating from the legacy SQLite database
+
+Older versions stored notes in `~/.config/bubble-note/notes.db`. Migrate them to
+files with a one-shot command:
+
+```sh
+bubble-note migrate --dry-run   # preview what would be migrated
+bubble-note migrate             # write notes into notes_dir
+```
+
+This migrates the latest content of each note, preserving IDs and timestamps,
+and leaves the legacy `notes.db` untouched.
 
 ## Requirements
 
