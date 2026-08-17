@@ -8,21 +8,22 @@ import (
 	"github.com/norriswu0/bubble-note/internal/theme"
 )
 
-func TestRenderEditorKeepsWithinTerminalWidth(t *testing.T) {
-	output := RenderEditor(EditorModel{
-		Width:      40,
-		Height:     16,
-		Title:      "quiet-cat",
-		TitleView:  "quiet-cat",
-		TagsView:   "work",
-		BodyView:   "body",
-		BodyActive: true,
-		State:      "UNSAVED",
+func TestRenderFormKeepsWithinTerminalWidth(t *testing.T) {
+	output := RenderForm(FormModel{
+		Width:       40,
+		Height:      16,
+		Heading:     "NEW NOTE",
+		TitleView:   "quiet-cat",
+		TagsView:    "work",
+		TitleActive: true,
 	}, theme.Default())
 	for _, line := range strings.Split(output, "\n") {
 		if lipgloss.Width(line) > 40 {
 			t.Fatalf("line is %d columns wide, want at most 40: %q", lipgloss.Width(line), line)
 		}
+	}
+	if !strings.Contains(output, "NEW NOTE") {
+		t.Fatalf("form output does not contain heading:\n%s", output)
 	}
 }
 
@@ -33,12 +34,9 @@ func TestRenderReaderShowsRenderedBody(t *testing.T) {
 	}
 }
 
-func TestRenderListPlacesSettingsInsideListPanel(t *testing.T) {
-	output := RenderList(ListModel{Width: 80, Height: 24, SettingsFocused: true}, theme.Default())
-	if !strings.Contains(output, ">> Settings") {
-		t.Fatalf("settings row is missing from list panel:\n%s", output)
-	}
-	if strings.Contains(output, "[>> Settings <<]") {
-		t.Fatal("settings should not be rendered as a footer button")
+func TestRenderListShowsGitStatus(t *testing.T) {
+	output := RenderList(ListModel{Width: 80, Height: 24, GitStatus: "git:main clean"}, theme.Default())
+	if !strings.Contains(output, "git:main clean") {
+		t.Fatalf("list output does not contain git status:\n%s", output)
 	}
 }

@@ -122,3 +122,36 @@ func TestLoadOrCreateWritesDefaultConfig(t *testing.T) {
 		t.Fatalf("loaded theme = %+v, want Catppuccin Mocha", loaded.Theme)
 	}
 }
+
+func TestEditorAndGitClientDefaults(t *testing.T) {
+	cfg := Default()
+	if got := cfg.GitClientCommand(); got != "lazygit" {
+		t.Fatalf("git client = %q, want lazygit", got)
+	}
+	if got := cfg.EditorCommand(); got != "nvim" {
+		t.Fatalf("editor = %q, want nvim fallback", got)
+	}
+	cfg.Editor = "code -w"
+	if got := cfg.EditorCommand(); got != "code -w" {
+		t.Fatalf("editor = %q, want code -w", got)
+	}
+}
+
+func TestNotesDirectoryResolvesDefault(t *testing.T) {
+	cfg := Default()
+	dir, err := cfg.NotesDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir == "" || !filepath.IsAbs(dir) {
+		t.Fatalf("notes dir = %q, want absolute default", dir)
+	}
+	cfg.NotesDir = "/tmp/notes"
+	dir, err = cfg.NotesDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != "/tmp/notes" {
+		t.Fatalf("notes dir = %q, want /tmp/notes", dir)
+	}
+}
